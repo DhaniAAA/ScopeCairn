@@ -1,0 +1,5 @@
+node_modules/
+dist/
+.scopecairn/
+*.log
+.DS_Store

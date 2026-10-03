@@ -1,0 +1,49 @@
+{
+  "name": "scopecairn",
+  "version": "0.1.0",
+  "description": "ScopeCairn — Codebase Intelligence & Agent Optimization Layer (local-first)",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "scopecairn": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "skills",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "code-intelligence",
+    "knowledge-graph",
+    "ai-agents",
+    "coding-assistant",
+    "static-analysis",
+    "developer-tools"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "prepublishOnly": "npm run typecheck && npm run build",
+    "dev": "tsx src/cli.ts",
+    "scan": "tsx src/cli.ts scan",
+    "status": "tsx src/cli.ts status",
+    "doctor": "tsx src/cli.ts doctor",
+    "clean": "tsx src/cli.ts clean",
+    "rebuild": "tsx src/cli.ts rebuild",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "commander": "^12.1.0",
+    "ignore": "^7.0.0",
+    "web-tree-sitter": "^0.25.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.7.0",
+    "tsup": "^8.3.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}

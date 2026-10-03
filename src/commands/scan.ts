@@ -5,7 +5,7 @@ export function cmdScan(repoRoot: string): void {
   console.log("✓ Repository detected");
   const stats = scanRepository(repoRoot);
   console.log(`✓ ${stats.totalFilesSeen} files found (non-ignored)`);
-  console.log(`✓ ${stats.sourceFiles} source files (ts/tsx/js/jsx/py)`);
+  console.log(`✓ ${stats.sourceFiles} source files`);
   if (stats.metaFiles > 0) {
     console.log(`✓ ${stats.metaFiles} config/schema files (json/yml/sql/prisma, file-level)`);
   }

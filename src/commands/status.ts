@@ -67,10 +67,3 @@ export function cmdStatus(repoRoot: string): void {
     db.close();
   }
 }
-
-export function cmdClean(repoRoot: string): void {
-  const dir = dataDir(repoRoot);
-  // Close WAL sidecars by removing whole dir.
-  fs.rmSync(dir, { recursive: true, force: true });
-  console.log(`Cleaned ${dir}`);
-}

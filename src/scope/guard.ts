@@ -14,6 +14,7 @@ export const DEFINITION_OF_DONE = [
   "Tidak ada file berubah tanpa alasan",
   "Tidak ada refactoring tak terkait",
   "Acceptance criteria terpenuhi",
+  "Index dimutakhirkan (`scopecairn scan`)",
 ] as const;
 
 export function guardBlock(): string {

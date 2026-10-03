@@ -17,10 +17,15 @@ Gunakan hasilnya sebagai titik awal. Jangan menjelajah repository dari nol.
 ## Selama bekerja
 - Ubah hanya file di daftar Required dan Optional.
 - Jangan sentuh file di daftar Protected tanpa persetujuan user.
+- Bila ternyata lebih dari 2 file harus diubah, panggil ulang konteks penuh:
+  \`${prefix} context --escalate "<permintaan user>"\`
 - Sebelum mengubah simbol yang dipakai banyak tempat, jalankan:
   \`${prefix} impact <path>\`
 - Butuh source sebuah fungsi? Gunakan \`${prefix} read symbol <nama>\`
   alih-alih membaca file penuh.
+
+## Setelah selesai
+Jalankan \`${prefix} scan\` agar indeks ScopeCairn mencerminkan perubahanmu.
 
 ## Pengecualian
 Lewati ScopeCairn hanya untuk pertanyaan non-coding.
@@ -59,6 +64,7 @@ Langkah:
 2. Baca bagian Relevant Files dan Task Scope.
 3. Jika ada perubahan pada simbol bersama, jalankan \`${prefix} impact <path>\`.
 4. Kerjakan task sesuai scope, lalu berhenti saat selesai.
+5. Setelah mengedit, jalankan \`${prefix} scan\` agar indeks ScopeCairn mutakhir.
 `;
 }
 
@@ -80,13 +86,12 @@ export const ALLOWLIST_COMMANDS = [
   "context",
   "impact",
   "read",
-  "query",
   "graph",
   "status",
   "doctor",
 ] as const;
 
-export const MANUAL_ONLY_COMMANDS = ["init", "scan", "rebuild", "clean"] as const;
+export const MANUAL_ONLY_COMMANDS = ["init", "scan", "rebuild"] as const;
 
 export function allowlistGuide(prefix: string): string {
   const lines = ALLOWLIST_COMMANDS.map((c) => `  ${prefix} ${c}`);

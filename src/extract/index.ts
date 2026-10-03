@@ -1,5 +1,6 @@
 import { extractTypeScript } from "./typescript.js";
 import { extractPython } from "./python.js";
+import { extractGeneric, extractHtml } from "./generic.js";
 import type { FileExtraction } from "./types.js";
 import { detectLanguage } from "../languages.js";
 
@@ -16,6 +17,17 @@ export function extractFile(relPath: string, source: string): FileExtraction {
       return extractTypeScript(source, relPath.endsWith("x"));
     case "python":
       return extractPython(source);
+    case "html":
+      return extractHtml(source);
+    case "java":
+    case "go":
+    case "rust":
+    case "php":
+    case "csharp":
+    case "cpp":
+    case "c":
+    case "ruby":
+      return extractGeneric(source, lang);
     default:
       return { symbols: [], relations: [] };
   }

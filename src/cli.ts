@@ -1,22 +1,39 @@
 import { Command } from "commander";
 import path from "node:path";
 import { cmdScan } from "./commands/scan.js";
-import { cmdStatus, cmdClean } from "./commands/status.js";
+import { cmdStatus } from "./commands/status.js";
 import { cmdRebuild } from "./commands/rebuild.js";
 import { cmdDoctor } from "./commands/doctor.js";
 import { cmdGraph } from "./commands/graph.js";
-import { cmdQuery } from "./commands/query.js";
 import { cmdRead } from "./commands/read.js";
 import { cmdContext } from "./commands/context.js";
 import { cmdImpact } from "./commands/impact.js";
 import { cmdInit } from "./commands/init.js";
 import { cmdBenchmark } from "./commands/benchmark.js";
+import { registerAgentCommands } from "./commands/agents.js";
+import pkg from "../package.json" with { type: "json" };
 
 const program = new Command();
 program
   .name("scopecairn")
   .description("ScopeCairn — local-first codebase intelligence layer")
-  .version("0.1.0");
+  .version((pkg as { version: string }).version)
+  .addHelpText(
+    "after",
+    `
+Examples:
+  $ scopecairn init                      index repo + setup agent integration
+  $ scopecairn init ./myapp --agents all  setup another directory, all agents
+  $ scopecairn context "add login"        relevant context + scope for a task
+  $ scopecairn context ./                 repository orientation map
+  $ scopecairn impact src/auth/login.ts   change impact analysis
+  $ scopecairn read symbol approveRequest  symbol-level source excerpt
+  $ scopecairn doctor                     health + integration check
+
+Agent commands (context, impact, read, graph, status, doctor) are
+read-only toward source and only write to .scopecairn/ — safe to allowlist.
+`
+  );
 
 function repoRoot(): string {
   return path.resolve(process.cwd());
@@ -30,18 +47,13 @@ export function resolveRoot(given?: string): string {
 
 program
   .command("scan")
-  .description("Index repository (Fase 1: files + hash + language)")
+  .description("Index repository (files + symbols + relations)")
   .action(() => cmdScan(repoRoot()));
 
 program
   .command("status")
   .description("Show index status")
   .action(() => cmdStatus(repoRoot()));
-
-program
-  .command("clean")
-  .description("Remove generated index data")
-  .action(() => cmdClean(repoRoot()));
 
 program
   .command("rebuild")
@@ -57,13 +69,8 @@ program
 
 program
   .command("graph <symbol>")
-  .description("Show relations of a symbol (Fase 2: 1-hop traversal)")
+  .description("Show relations of a symbol")
   .action((symbol: string) => cmdGraph(repoRoot(), symbol));
-
-program
-  .command("query <text>")
-  .description("Search symbols/codebase knowledge (substring match)")
-  .action((text: string) => cmdQuery(repoRoot(), text));
 
 program
   .command("read")
@@ -105,5 +112,7 @@ program
   .action((opts: { tune?: boolean; noRefresh?: boolean }) =>
     cmdBenchmark(repoRoot(), opts)
   );
+
+registerAgentCommands(program, repoRoot);
 
 program.parseAsync(process.argv);

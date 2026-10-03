@@ -13,7 +13,8 @@ export type SymbolType =
   | "type"
   | "component"
   | "route"
-  | "model";
+  | "model"
+  | "element";
 
 export type RelationType =
   | "CONTAINS"

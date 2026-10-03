@@ -4,6 +4,7 @@ import { refreshIndex } from "../refresh.js";
 import { retrieve } from "../retrieval/retrieve.js";
 import { classify } from "../retrieval/classify.js";
 import { buildContext } from "../retrieval/contextBuilder.js";
+import { cmdOrientasi, looksLikeRepoPath } from "./orientasi.js";
 
 export interface ContextOptions {
   escalate?: boolean;
@@ -18,8 +19,7 @@ export function cmdContext(
   opts: ContextOptions = {}
 ): void {
   if (!opts.noRefresh) {
-    const { stats, bulk } = refreshIndex(repoRoot);
-    if (bulk) {
+    const { stats, bulk } = refreshIndex(repoRoot);    if (bulk) {
       console.log(
         `> Note: ${stats.inserted + stats.updated} file berubah ` +
           `(mis. git pull/ganti branch). Konteks tetap dibuat; ` +
@@ -35,6 +35,14 @@ export function cmdContext(
     ).n;
     if (fileCount === 0) {
       console.log("Index kosong. Jalankan `scopecairn scan` dulu.");
+      return;
+    }
+
+    // Task berupa path (`./`, `src/db.ts`, ...) = minta orientasi:
+    // deterministik, tanpa ranking. Baru ke retrieval bila bukan path.
+    if (looksLikeRepoPath(db, repoRoot, task)) {
+      logInvocation(db, "context");
+      cmdOrientasi(repoRoot, task);
       return;
     }
 

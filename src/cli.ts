@@ -98,8 +98,8 @@ program
 
 program
   .command("init [path]")
-  .description("Initial indexing + generate AGENTS.md, Skill, Workflow, agent matrix")
-  .option("--agents <list>", "agent targets: comma list from agents,claude,gemini,cursor,windsurf,copilot,kiro, or 'all'")
+  .description("Initial indexing + Skill, Workflow, agent skills (never touches AGENTS.md)")
+  .option("--agents <list>", "agent targets: comma list from claude,cursor,windsurf,copilot,kiro,opencode, or 'all'")
   .action((targetPath: string | undefined, opts: { agents?: string }) =>
     cmdInit(resolveRoot(targetPath), opts)
   );

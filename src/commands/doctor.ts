@@ -47,6 +47,8 @@ export async function cmdDoctor(repoRoot: string): Promise<void> {
   console.log(`${tick(fs.existsSync(protPath))} Protected ${protPath}`);
 
   // AI-3: file integrasi di lokasi yang benar + prefix konsisten (AI-9).
+  // mode=new (skill/command milik penuh): keberadaan file = terpasang.
+  // mode=merge (aturan menumpang file user): wajib ada marker.
   const expectedPrefix = detectPrefix(repoRoot);
   const agentDir = detectAgentDir(repoRoot);
   let prefixOk = true;
@@ -55,7 +57,7 @@ export async function cmdDoctor(repoRoot: string): Promise<void> {
     const abs = path.join(repoRoot, t.rel);
     if (!fs.existsSync(abs)) continue;
     const text = fs.readFileSync(abs, "utf8");
-    if (!text.includes(MARKER)) continue;
+    if (t.mode === "merge" && !text.includes(MARKER)) continue;
     matrixOk++;
     const used = extractPrefixUsed(text);
     if (used && used !== expectedPrefix) {
@@ -84,6 +86,6 @@ export async function cmdDoctor(repoRoot: string): Promise<void> {
   // §8.6: pengingat yang tak bisa dicek otomatis.
   console.log(`i Strict Mode mengabaikan allowlist — semua perintah tetap perlu persetujuan.`);
 
-  const healthy = nodeOk && sqliteOk && ts.ok && dbOk && matrixOk > 0 && skillOk && prefixOk;
+  const healthy = nodeOk && sqliteOk && ts.ok && dbOk && (matrixOk > 0 || skillOk) && prefixOk;
   console.log(`Status: ${healthy ? "HEALTHY" : "DEGRADED (see ✗ above)"}`);
 }

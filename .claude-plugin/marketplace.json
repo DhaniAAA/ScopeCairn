@@ -1,0 +1,14 @@
+{
+  "name": "scopecairn",
+  "description": "ScopeCairn plugin marketplace",
+  "owner": {
+    "name": "ScopeCairn Contributors"
+  },
+  "plugins": [
+    {
+      "name": "scopecairn",
+      "source": "./plugins/scopecairn",
+      "description": "ScopeCairn codebase context + scope for AI coding agents"
+    }
+  ]
+}

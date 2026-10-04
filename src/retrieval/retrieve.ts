@@ -67,30 +67,43 @@ export function retrieve(
     proximity.set(s.symbolId, Math.max(proximity.get(s.symbolId) ?? 0, s.bm25));
     visited.add(s.symbolId);
   });
-  const edgeStmt = db.prepare(
-    `SELECT source_id, target_id, weight FROM relationships`
-  );
-  // Muat adjacency sekali (repo kecil-menengah; Fase 6 menilai skala besar).
-  const adj = new Map<number, { to: number; w: number }[]>();
-  for (const r of edgeStmt.all() as { source_id: number; target_id: number; weight: number }[]) {
-    if (!adj.has(r.source_id)) adj.set(r.source_id, []);
-    adj.get(r.source_id)!.push({ to: r.target_id, w: r.weight });
-    if (!adj.has(r.target_id)) adj.set(r.target_id, []);
-    adj.get(r.target_id)!.push({ to: r.source_id, w: r.weight * 0.8 });
+  // EXPAND: BFS berlapis — tiap hop hanya mengambil edge yang dikunjungi
+  // via SQL (skala: proporsional derajat seed, bukan total edge).
+  // Matematika skor identik dengan versi load-semua: base * w * decay^hop.
+  const CHUNK = 2000;
+  function neighborsOf(ids: number[]): { from: number; to: number; w: number }[] {
+    const out: { from: number; to: number; w: number }[] = [];
+    for (let i = 0; i < ids.length; i += CHUNK) {
+      const c = ids.slice(i, i + CHUNK);
+      const ph = c.map(() => "?").join(",");
+      for (const r of db
+        .prepare(
+          `SELECT source_id AS f, target_id AS t, weight AS w FROM relationships WHERE source_id IN (${ph})`
+        )
+        .all(...c) as { f: number; t: number; w: number }[]) {
+        out.push({ from: r.f, to: r.t, w: r.w });
+      }
+      for (const r of db
+        .prepare(
+          `SELECT target_id AS f, source_id AS t, weight * 0.8 AS w FROM relationships WHERE target_id IN (${ph})`
+        )
+        .all(...c) as { f: number; t: number; w: number }[]) {
+        out.push({ from: r.f, to: r.t, w: r.w });
+      }
+    }
+    return out;
   }
   let hopScore = 1;
   for (let depth = 1; depth <= config.maxDepth; depth++) {
     hopScore *= config.decayPerHop;
     const next: number[] = [];
-    for (const id of frontier) {
-      const base = proximity.get(id) ?? 0;
-      for (const e of adj.get(id) ?? []) {
-        const cand = base * e.w * hopScore;
-        if (cand > (proximity.get(e.to) ?? 0)) proximity.set(e.to, cand);
-        if (!visited.has(e.to)) {
-          visited.add(e.to);
-          next.push(e.to);
-        }
+    for (const e of neighborsOf(frontier)) {
+      const base = proximity.get(e.from) ?? 0;
+      const cand = base * e.w * hopScore;
+      if (cand > (proximity.get(e.to) ?? 0)) proximity.set(e.to, cand);
+      if (!visited.has(e.to)) {
+        visited.add(e.to);
+        next.push(e.to);
       }
     }
     frontier = next;

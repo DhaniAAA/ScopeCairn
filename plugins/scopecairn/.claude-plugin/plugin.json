@@ -1,0 +1,8 @@
+{
+  "name": "scopecairn",
+  "version": "0.3.0",
+  "description": "ScopeCairn codebase context + scope for AI coding agents",
+  "author": {
+    "name": "ScopeCairn Contributors"
+  }
+}

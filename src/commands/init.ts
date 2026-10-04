@@ -2,15 +2,16 @@ import fs from "node:fs";
 import path from "node:path";
 import { scanRepository } from "../scanner.js";
 import { detectPrefix } from "../integrate/detect.js";
-import { AGENT_MATRIX, findTarget, parseAgentsOption } from "../integrate/matrix.js";
+import { AGENT_MATRIX, findTarget, parseAgentsOption, type AgentTarget } from "../integrate/matrix.js";
 import { installAntigravity, installTarget, allowlistText } from "../integrate/install.js";
 
 export interface InitOptions {
   agents?: string;
 }
 
-// `scopecairn init` (AI-1): indexing awal + inti (AGENTS.md, Skill,
-// Workflow) + matriks agent yang diminta/terdeteksi. Idempoten via marker.
+// `scopecairn init` (AI-1): indexing awal + Skill/Workflow Antigravity +
+// matriks agent yang diminta/terdeteksi. TIDAK menulis AGENTS.md/CLAUDE.md:
+// file itu milik detail repo user — distribusi lewat skill tiap agent.
 export function cmdInit(repoRoot: string, opts: InitOptions = {}): void {
   console.log("ScopeCairn");
   console.log("✓ Repository detected");
@@ -43,23 +44,22 @@ export function cmdInit(repoRoot: string, opts: InitOptions = {}): void {
   console.log(allowlistText(repoRoot));
 }
 
-function withCore(ids: string[]) {
-  const out = [];
+function withCore(ids: string[]): AgentTarget[] {
+  const out: AgentTarget[] = [];
   for (const id of ids) {
     const t = findTarget(id);
     if (!t) {
       console.log(`! Unknown agent "${id}" (pilihan: ${AGENT_MATRIX.map((x) => x.id).join(", ")}, all)`);
       continue;
     }
-    out.push(t);
+    if (!out.includes(t)) out.push(t);
   }
-  if (!out.includes(AGENT_MATRIX[0])) out.unshift(AGENT_MATRIX[0]);
   return out;
 }
 
 function withDetected(repoRoot: string) {
-  const targets = [AGENT_MATRIX[0]];
-  for (const t of AGENT_MATRIX.slice(1)) {
+  const targets = [];
+  for (const t of AGENT_MATRIX) {
     if (fs.existsSync(path.join(repoRoot, t.presentMarker))) targets.push(t);
   }
   return targets;

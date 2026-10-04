@@ -1,12 +1,13 @@
 import {
-  agentsMd,
   genericRuleMd,
   cursorRuleMdc,
+  opencodeCommandMd,
+  claudeSkillMd,
 } from "./templates.js";
 
-// Matriks agent: satu isi aturan, banyak rumah. AGENTS.md dibaca hampir
-// semua agent modern; file lain adalah shim tipis agar agent yang hanya
-// membaca jalurnya sendiri tetap terpanggil.
+// Matriks agent: tiap agent dilayani lewat mekanisme native-nya sendiri
+// (skill, rules, command) — ScopeCairn TIDAK menulis AGENTS.md/CLAUDE.md,
+// karena file itu milik detail repo user, bukan instruksi tool.
 
 export interface AgentTarget {
   id: string;
@@ -22,28 +23,12 @@ export interface AgentTarget {
 
 export const AGENT_MATRIX: AgentTarget[] = [
   {
-    id: "agents",
-    label: "AGENTS.md (universal: Codex, Aider, Opencode, Amp, Jules, ...)",
-    rel: "AGENTS.md",
-    mode: "merge",
-    render: agentsMd,
-    presentMarker: "AGENTS.md",
-  },
-  {
     id: "claude",
     label: "Claude Code",
-    rel: "CLAUDE.md",
-    mode: "merge",
-    render: genericRuleMd,
-    presentMarker: "CLAUDE.md",
-  },
-  {
-    id: "gemini",
-    label: "Gemini / Antigravity CLI",
-    rel: "GEMINI.md",
-    mode: "merge",
-    render: genericRuleMd,
-    presentMarker: "GEMINI.md",
+    rel: ".claude/skills/scopecairn/SKILL.md",
+    mode: "new",
+    render: claudeSkillMd,
+    presentMarker: ".claude",
   },
   {
     id: "cursor",
@@ -76,6 +61,14 @@ export const AGENT_MATRIX: AgentTarget[] = [
     mode: "new",
     render: genericRuleMd,
     presentMarker: ".kiro",
+  },
+  {
+    id: "opencode",
+    label: "OpenCode",
+    rel: ".opencode/commands/scopecairn.md",
+    mode: "new",
+    render: opencodeCommandMd,
+    presentMarker: ".opencode",
   },
 ];
 

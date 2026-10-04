@@ -5,11 +5,11 @@ import {
   allowlistText,
   installAntigravity,
   installTarget,
-  resolveAgent,
   uninstallAntigravity,
   uninstallTarget,
 } from "../integrate/install.js";
 import { detectPrefix } from "../integrate/detect.js";
+import { opencodePermissionGuide } from "../integrate/templates.js";
 
 // Perintah per-agent: `scopecairn <agent> install|uninstall` + `scopecairn agents list`.
 // Antigravity = Skill + Workflow + panduan allowlist; lainnya = file matriks.
@@ -48,8 +48,13 @@ export function registerAgentCommands(program: Command, repoRoot: () => string):
       .description(`Write ${t.rel}`)
       .action(() => {
         const root = repoRoot();
-        const r = installTarget(root, t, detectPrefix(root));
+        const prefix = detectPrefix(root);
+        const r = installTarget(root, t, prefix);
         console.log(`✓ ${t.label}: ${r.rel} (${r.how})`);
+        if (t.id === "opencode") {
+          console.log("");
+          console.log(opencodePermissionGuide(prefix));
+        }
       });
     cmd
       .command("uninstall")

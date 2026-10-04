@@ -28,8 +28,10 @@ No MCP server, no embeddings, no network calls, no telemetry.
   Prisma models, and Drizzle tables/queries detected automatically.
 - **Multi-language** — TypeScript, JavaScript, Python, Java, Go, Rust,
   PHP, C#, C/C++, Ruby, HTML (plus config/schema files as graph nodes).
-- **Multi-agent setup** — one `init` writes rules for AGENTS.md,
-  Claude Code, Gemini, Cursor, Windsurf, Copilot, Kiro, or all at once.
+- **Multi-agent setup** — skills for Claude Code (plugin + marketplace
+  ready), Antigravity, Cursor, Windsurf, Copilot, Kiro, and an OpenCode
+  slash command. ScopeCairn never touches your `AGENTS.md`/`CLAUDE.md` —
+  those hold your repo's details, not tool instructions.
 
 ## Install
 
@@ -63,7 +65,20 @@ it runs project setup itself.
 
 ```bash
 cd your-repo
-scopecairn init      # index + generate AGENTS.md, Skill, Workflow
+scopecairn init      # index + Antigravity Skill + Workflow
+```
+
+Claude Code (project skill, committed with the repo):
+
+```bash
+scopecairn claude install
+```
+
+Or as a plugin from the bundled marketplace (this repo):
+
+```
+/plugin marketplace add <github-user>/scopecairn
+/plugin install scopecairn@scopecairn
 ```
 
 After setup, your agent calls ScopeCairn automatically on every coding task.
@@ -82,7 +97,8 @@ Per-agent installers (instead of `init --agents …`):
 
 ```bash
 scopecairn antigravity install   # Skill + Workflow + allowlist guide
-scopecairn claude install        # CLAUDE.md (also: gemini, cursor, windsurf, copilot, kiro)
+scopecairn claude install        # project skill .claude/skills (also: cursor, windsurf, copilot, kiro)
+scopecairn opencode install      # /scopecairn slash command + permission snippet
 scopecairn claude uninstall      # clean removal, user content preserved
 scopecairn agents list
 ```
@@ -91,7 +107,7 @@ scopecairn agents list
 
 | Command | Description |
 |---|---|
-| `init [path]` | Initial indexing + `AGENTS.md`, Skill, Workflow, agent matrix (`--agents …\|all`) |
+| `init [path]` | Initial indexing + Skill, Workflow, detected agent skills (`--agents …\|all`; never writes `AGENTS.md`) |
 | `scan` / `rebuild` | Manual index management (`scan` inkremental; `rebuild` dari nol) |
 | `status` / `doctor` | Index status (incl. adapters, invocations) and health checks |
 | `context "<task>"` | Main entry point: context + scope (`--escalate`, `--no-refresh`); a path task returns an orientation map |

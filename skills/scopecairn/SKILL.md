@@ -25,6 +25,8 @@ allowed-tools: Bash
 2. Ubah hanya Required/Optional; Protected perlu persetujuan user.
    Simbol bersama → `scopecairn impact <path>`.
    Butuh isi fungsi → `scopecairn read symbol <nama>`, bukan baca file penuh.
+   Lacak alur antar simbol → `scopecairn path <A> <B>`.
+   Butuh diagram/ekspor → `scopecairn export --format mermaid|graphml|dot|json`.
 3. Task membesar (>2 file)? Panggil ulang `scopecairn context --escalate`.
 4. Setelah mengedit: `scopecairn scan`.
    Berhenti saat acceptance criteria terpenuhi.

@@ -5,12 +5,13 @@ import { checkTreeSitter } from "../treesitter.js";
 import { detectAgentDir, detectPrefix, extractPrefixUsed } from "../integrate/detect.js";
 import { MARKER } from "../integrate/templates.js";
 import { AGENT_MATRIX } from "../integrate/matrix.js";
+import { logError } from "../log.js";
 
 function tick(ok: boolean): string {
   return ok ? "✓" : "✗";
 }
 
-export async function cmdDoctor(repoRoot: string): Promise<void> {
+export async function cmdDoctor(repoRoot: string, opts?: { verbose?: boolean }): Promise<void> {
   const nodeOk = Number(process.versions.node.split(".")[0]) >= 20;
   console.log(`${tick(nodeOk)} Node.js ${process.version} (need >=20)`);
 
@@ -20,8 +21,10 @@ export async function cmdDoctor(repoRoot: string): Promise<void> {
     const req = createRequire(import.meta.url);
     const m = req("node:" + "sqlite") as { DatabaseSync: unknown };
     sqliteOk = typeof m.DatabaseSync === "function";
-  } catch {
+  } catch (err) {
     sqliteOk = false;
+    logError("doctor", err, repoRoot);
+    if (opts?.verbose) console.error(err);
   }
   console.log(`${tick(sqliteOk)} SQLite (node:sqlite built-in)`);
 
@@ -38,10 +41,53 @@ export async function cmdDoctor(repoRoot: string): Promise<void> {
     db.close();
     dbOk = fs.existsSync(dbPath(repoRoot));
     graphDetail = ` (${s} symbols, ${r} rels)`;
-  } catch {
+  } catch (err) {
     dbOk = false;
+    logError("doctor", err, repoRoot);
+    if (opts?.verbose) console.error(err);
   }
   console.log(`${tick(dbOk)} Database ${dbPath(repoRoot)}${graphDetail}`);
+
+  // Graphify Engine: circular dependencies + critical single points of failure.
+  try {
+    const db = openDb(repoRoot);
+    try {
+      const { refreshCycles, getCycles, describeCycle } = await import("../graph/cycles.js");
+      const { ensureMetrics, topByPageRank } = await import("../graph/metrics.js");
+      const cycles = getCycles(db, 5);
+      if (cycles.length === 0) {
+        // Cache kosong → hitung malas sekali (Tarjan O(N+M)).
+        try {
+          refreshCycles(db);
+        } catch (err) {
+          logError("doctor", err, repoRoot);
+          if (opts?.verbose) console.error(err);
+        }
+      }
+      const found = getCycles(db, 5);
+      console.log(`${tick(found.length === 0)} Circular dependencies (${found.length} cycle(s))`);
+      for (const c of found.slice(0, 3)) {
+        console.log(`  ~ cycle[${c.length}]: ${describeCycle(db, c)}`);
+      }
+      ensureMetrics(db);
+      const gods = topByPageRank(db, 3);
+      if (gods.length > 0) {
+        console.log(`i Critical hotspots (PageRank):`);
+        for (const g of gods) {
+          console.log(
+            `  ! ${g.name} (${g.type}, ${g.file}) pr=${g.pagerank.toFixed(4)} ` +
+              `in=${g.inDegree} out=${g.outDegree}`
+          );
+        }
+      }
+    } finally {
+      db.close();
+    }
+  } catch (err) {
+    logError("doctor", err, repoRoot);
+    if (opts?.verbose) console.error(err);
+    console.log(`i Graph metrics unavailable (run \`scopecairn scan\` first)`);
+  }
 
   const protPath = path.join(dataDir(repoRoot), "protected.yml");
   console.log(`${tick(fs.existsSync(protPath))} Protected ${protPath}`);

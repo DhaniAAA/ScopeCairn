@@ -92,6 +92,16 @@ export function pagesRouteFromRel(rel: string): { kind: "page" | "route"; url: s
   return { kind: "page", url: "/" + rest };
 }
 
+/** True bila konten memuat direktif Server Actions (`"use server"` / `'use server'`). */
+export function detectServerActions(content: string): boolean {
+  return content.includes('"use server"') || content.includes("'use server'");
+}
+
+/** True bila path file adalah middleware Next.js (`middleware.ts`/`middleware.js`). */
+export function detectMiddleware(rel: string): boolean {
+  return /(^|\/)middleware\.(ts|js)$/.test(rel);
+}
+
 /** Handler yang diekspor route.ts: `export async function GET(`. */
 export function routeHandlers(content: string): { method: string; line: number }[] {
   const out: { method: string; line: number }[] = [];

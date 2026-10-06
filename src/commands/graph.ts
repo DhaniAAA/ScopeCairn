@@ -1,6 +1,9 @@
 import { openDb } from "../db.js";
 import { logInvocation } from "../invocations.js";
 import { findSymbols, neighbors } from "../graph.js";
+import { getMetrics, ensureMetrics } from "../graph/metrics.js";
+import { getCluster, ensureClusters } from "../graph/clusters.js";
+import { nodeInCycle } from "../graph/cycles.js";
 
 export function cmdGraph(repoRoot: string, key: string): void {
   const db = openDb(repoRoot);
@@ -23,6 +26,24 @@ export function cmdGraph(repoRoot: string, key: string): void {
       console.log("");
     }
     const edges = neighbors(db, node.id);
+    // Graphify Engine: skor centrality + komunitas + status siklus node.
+    try {
+      ensureMetrics(db);
+      ensureClusters(db);
+      const m = getMetrics(db, node.id);
+      const c = getCluster(db, node.id);
+      const parts: string[] = [];
+      if (m) parts.push(`pr=${m.pagerank.toFixed(4)} btw=${m.betweenness.toFixed(4)} in=${m.inDegree} out=${m.outDegree}`);
+      if (c) parts.push(`community=${c.clusterName}`);
+      try {
+        if (nodeInCycle(db, node.id)) parts.push(`IN CYCLE`);
+      } catch {
+        // ignore
+      }
+      if (parts.length > 0) console.log(`Metrics: ${parts.join(" · ")}`);
+    } catch {
+      // metrik opsional — jangan gagalkan perintah graph
+    }
     if (edges.length === 0) {
       console.log("(no relations)");
       return;

@@ -14,6 +14,12 @@ export function cmdScan(repoRoot: string): void {
   if (stats.adapters.length > 0) {
     console.log(`✓ adapters: ${stats.adapters.join(", ")}`);
   }
+  if (stats.graphWritten) {
+    console.log(`✓ GRAPH.md updated (.scopecairn/GRAPH.md)`);
+  }
+  if (stats.visualWritten) {
+    console.log(`✓ GRAPH.html updated (.scopecairn/GRAPH.html — open in browser)`);
+  }
   console.log(
     `✓ index: +${stats.inserted} new, ~${stats.updated} updated, =${stats.unchanged} unchanged, -${stats.removed} removed`
   );

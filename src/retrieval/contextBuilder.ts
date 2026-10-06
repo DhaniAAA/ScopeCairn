@@ -108,6 +108,48 @@ export function buildContext(
   const symLine = (r: (typeof ranked)[number]): string =>
     `- ${r.name} (${r.type}) — \`${r.file}\` [${r.score.toFixed(2)} ${r.reason}]`;
 
+  // Graphify Engine: naikkan peringkat kandidat dengan PageRank — simbol yang
+  // paling kritis di arsitektur (God objects, hubs) tampil sebagai hotspot.
+  let hotspots: string[] = [];
+  let cycleWarn = "";
+  try {
+    const ids = ranked.slice(0, 20).map((r) => r.id);
+    if (ids.length > 0) {
+      const ph = ids.map(() => "?").join(",");
+      const prRows = db
+        .prepare(`SELECT node_id AS id, pagerank AS pr FROM node_metrics WHERE node_id IN (${ph})`)
+        .all(...ids) as { id: number; pr: number }[];
+      const pr = new Map(prRows.map((r) => [r.id, r.pr]));
+      const boosted = ranked
+        .slice(0, 20)
+        .map((r) => ({ r, boost: r.score + (pr.get(r.id) ?? 0) * 2 }))
+        .sort((a, b) => b.boost - a.boost)
+        .slice(0, 5);
+      hotspots = boosted.map(
+        (b) => `- ${b.r.name} (${b.r.type}) — \`${b.r.file}\` [pr=${(pr.get(b.r.id) ?? 0).toFixed(4)}]`
+      );
+      // Peringatan siklus: kandidat yang terjerat circular dependency.
+      const cycRows = db.prepare(`SELECT nodes_json AS js FROM cycles`).all() as { js: string }[];
+      const inCycle = new Set<number>();
+      for (const c of cycRows) {
+        try {
+          for (const n of JSON.parse(c.js) as number[]) inCycle.add(n);
+        } catch {
+          // ignore
+        }
+      }
+      const trapped = ranked.slice(0, 10).filter((r) => inCycle.has(r.id));
+      if (trapped.length > 0) {
+        cycleWarn =
+          `\n## Circular dependency warning\n` +
+          trapped.slice(0, 5).map((r) => `- ${r.name} (\`${r.file}\`) is inside a dependency cycle`).join("\n") +
+          `\n`;
+      }
+    }
+  } catch {
+    // tabel metrik/siklus belum ada — lewati tanpa gagal
+  }
+
   // Task Scope nyata (FR-07): Required/Optional/Protected dari pola path.
   const scope = computeScope(
     highFiles,
@@ -122,8 +164,12 @@ export function buildContext(
     `## Relevant Files\n### HIGH\n${highFiles.map((f) => `- ${f}`).join("\n") || "-"}\n` +
     `### MEDIUM\n${medFiles.map((f) => `- ${f}`).join("\n") || "-"}\n\n` +
     `## Key Symbols\n${hi.slice(0, 8).map(symLine).join("\n") || "-"}\n\n` +
+    (hotspots.length > 0
+      ? `## Critical hotspots (PageRank)\n${hotspots.join("\n")}\n\n`
+      : ``) +
     `## Dependencies\n${deps.map((d) => `- ${d}`).join("\n") || "-"}\n\n` +
     `## Related Tests\n${tests.map((t) => `- ${t}`).join("\n") || "-"}\n\n` +
+    cycleWarn +
     scopeBlock(scope) +
     `\n` +
     guardBlock();

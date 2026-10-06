@@ -5,11 +5,24 @@ import type { AdapterFile, FrameworkAdapter } from "./types.js";
 import { prismaAdapter } from "./prisma.js";
 import { nextjsAdapter, refreshQueries } from "./nextjs.js";
 import { drizzleAdapter, refreshDrizzleQueries } from "./drizzle.js";
+import { expressAdapter } from "./express.js";
+import { fastapiAdapter } from "./fastapi.js";
+import { sqlalchemyAdapter, refreshSqlAlchemyQueries } from "./sqlalchemy.js";
+import { vueAdapter } from "./vue.js";
 import { syncFileIndex } from "../retrieval/symbolIndex.js";
+import { logError } from "../log.js";
 
 // Registrasi adapter (FR-13): kontribusi komunitas = file baru + satu baris di sini.
-// Urutan penting: prisma/drizzle dulu (menyediakan simbol model untuk QUERIES).
-const ADAPTERS: FrameworkAdapter[] = [prismaAdapter, drizzleAdapter, nextjsAdapter];
+// Urutan penting: prisma/drizzle/sqlalchemy dulu (menyediakan simbol model untuk QUERIES).
+const ADAPTERS: FrameworkAdapter[] = [
+  prismaAdapter,
+  drizzleAdapter,
+  sqlalchemyAdapter,
+  nextjsAdapter,
+  expressAdapter,
+  fastapiAdapter,
+  vueAdapter,
+];
 
 export function detectAdapters(files: string[], repoRoot?: string): FrameworkAdapter[] {
   return ADAPTERS.filter((a) => {
@@ -17,7 +30,8 @@ export function detectAdapters(files: string[], repoRoot?: string): FrameworkAda
       if (!a.detect(files)) return false;
       if (repoRoot && a.confirm) return a.confirm(repoRoot, files);
       return true;
-    } catch {
+    } catch (err) {
+      logError("adapters", err, repoRoot);
       return false;
     }
   });
@@ -57,8 +71,8 @@ export function runAdapters(
       symbols += r.symbols;
       relations += r.relations;
       for (const i of inputs) touched.add(i.fileId);
-    } catch {
-      // Adapter tak boleh menggagalkan scan.
+    } catch (err) {
+      logError("adapters", err, repoRoot);
     }
   }
   // Simbol adapter disisip setelah sync FTS fase 1 — sinkronkan ulang.
@@ -69,8 +83,8 @@ export function runAdapters(
     if (row) {
       try {
         syncFileIndex(db, fileId, row.path);
-      } catch {
-        // ignore
+      } catch (err) {
+        logError("adapters", err, repoRoot);
       }
     }
   }
@@ -102,11 +116,12 @@ export function runAdapters(
         }
       }
       relations += refresh(db, inputs);
-    } catch {
-      // ignore
+    } catch (err) {
+      logError("adapters", err, repoRoot);
     }
   };
   refreshTargets("nextjs", nextjsAdapter.relevant, refreshQueries);
   refreshTargets("drizzle", drizzleAdapter.relevant, refreshDrizzleQueries);
+  refreshTargets("sqlalchemy", sqlalchemyAdapter.relevant, refreshSqlAlchemyQueries);
   return { adapters: active.map((a) => a.id), symbols, relations };
 }

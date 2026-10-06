@@ -14,7 +14,7 @@ function loadDatabaseSync(): typeof DatabaseSyncType {
 
 export const DATA_DIR_NAME = ".scopecairn";
 export const DB_FILE_NAME = "scopecairn.db";
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 export function dataDir(repoRoot: string): string {
   return path.join(repoRoot, DATA_DIR_NAME);
@@ -93,6 +93,31 @@ export function openDb(repoRoot: string): DatabaseSyncType {
       timestamp TEXT NOT NULL DEFAULT (datetime('now'))
     );
     CREATE INDEX IF NOT EXISTS idx_invocations_cmd ON invocations(command);
+    -- Graphify Engine: node centrality, community clustering, cycle cache.
+    CREATE TABLE IF NOT EXISTS node_metrics (
+      node_id INTEGER PRIMARY KEY,
+      pagerank REAL NOT NULL DEFAULT 0.0,
+      betweenness REAL NOT NULL DEFAULT 0.0,
+      in_degree INTEGER NOT NULL DEFAULT 0,
+      out_degree INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY(node_id) REFERENCES symbols(id) ON DELETE CASCADE
+    );
+    CREATE TABLE IF NOT EXISTS clusters (
+      node_id INTEGER PRIMARY KEY,
+      cluster_id INTEGER NOT NULL,
+      cluster_name TEXT,
+      modularity REAL,
+      FOREIGN KEY(node_id) REFERENCES symbols(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_clusters_cid ON clusters(cluster_id);
+    CREATE TABLE IF NOT EXISTS cycles (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      cycle_hash TEXT UNIQUE,
+      length INTEGER NOT NULL DEFAULT 0,
+      nodes_json TEXT NOT NULL DEFAULT '[]',
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
   `);
   db.prepare(
     `INSERT INTO meta(key, value) VALUES ('schema_version', ?)

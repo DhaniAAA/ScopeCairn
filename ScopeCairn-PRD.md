@@ -138,7 +138,7 @@ ScopeCairn **bukan**:
 | D2 | **Tanpa embedding.** Retrieval berbasis knowledge graph. | Lebih ringan, deterministik, dapat dijelaskan, dan sepenuhnya lokal. |
 | D3 | **Open source, lisensi MIT.** | Adopsi mudah; cocok untuk developer tool. |
 | D4 | **Klasifikasi task** SIMPLE vs COMPLEX berdasarkan estimasi banyaknya perubahan kode pada file (§16). | Mencegah ScopeCairn menjadi beban pada task kecil. |
-| D5 | **Tidak ada deteksi endpoint & database di MVP** (FR-13 dicabut). Area database/API/auth dilindungi lewat aturan *Protected* berbasis pola path (FR-07). | Mengurangi kompleksitas; adapter per framework menjadi fitur masa depan (§22). |
+| D5 | **Tidak ada deteksi endpoint & database di MVP** (FR-13 kini diimplementasikan via framework adapters: prisma, drizzle, nextjs, express, fastapi, sqlalchemy, vue). Area database/API/auth tetap dilindungi lewat aturan *Protected* berbasis pola path (FR-07). | Mengurangi kompleksitas; adapter per framework menjadi fitur masa depan (§22). |
 | D6 | **Pemanggilan dipicu agent**, bukan sistem. | Hook IDE belum terverifikasi; lihat §8. |
 | D7 | **Bahasa: TypeScript (Node.js)**, didistribusikan lewat npm (`npm install -g` / `npx`). | Instalasi paling mudah bagi developer web yang memakai Antigravity; tanpa runtime tambahan. |
 | D8 | **Nama produk dan paket: `scopecairn`** (sebelumnya CodeMind, lalu CodeSherpa). | `codemind` sudah dipakai proyek dengan niche serupa di npm; `codesherpa` sudah dipakai merek lain. Nama baru dicek bebas di npm, PyPI, dan GitHub. |
@@ -256,7 +256,7 @@ Prioritas: **P0** = wajib MVP, **P1** = setelah MVP, **P2** = masa depan.
 | FR-10 | Auto-Invocation (Antigravity) | P0 |
 | FR-11 | Integrasi Git | P1 |
 | FR-12 | Incremental Indexing | P1 |
-| FR-13 | *(Dicabut dari MVP; dipindahkan ke §22)* | — |
+| FR-13 | *(Diimplementasikan: prisma, drizzle, nextjs, express, fastapi, sqlalchemy, vue)* | — |
 | FR-14 | Task Complexity Classifier | P0 |
 
 ### FR-01 — Repository Scanner
@@ -403,9 +403,9 @@ scopecairn context "<task>"
 - Jika jumlah file berubah sangat besar (mis. setelah `git pull` atau ganti branch), ScopeCairn memberi peringatan dan menyarankan `scopecairn scan` penuh, bukan memblokir agent.
 - Flag `--no-refresh` tersedia untuk melewati pembaruan (debugging/benchmark).
 
-### FR-13 — Dicabut
+### FR-13 - Framework Adapters (Diimplementasikan)
 
-Deteksi endpoint dan referensi database lewat framework adapter **tidak termasuk MVP** (lihat D5). Fungsi pengamanannya digantikan aturan Protected berbasis pola path (FR-07). Rencana adapter dipindahkan ke §22.
+Deteksi endpoint dan referensi database lewat framework adapter **diimplementasikan**: nextjs, prisma, drizzle, express, fastapi, sqlalchemy, vue. Fungsi pengamanannya tetap dilengkapi aturan Protected berbasis pola path (FR-07).
 
 ### FR-14 — Task Complexity Classifier
 
@@ -930,7 +930,7 @@ Dashboard web, cloud, multi-user, memory kompleks, perencanaan otonom lanjutan, 
 | 5 | Ambang angka FR-14 (≤ 2 file dst.) sudah tepat? | Dikalibrasi lewat benchmark |
 | 6 | Apakah allowlist Antigravity mencocokkan perintah berantai (`&&`, pipe) dan argumen panjang dengan benar, serta apakah ada cara resmi mendistribusikan allowlist per proyek? | Terbuka, diverifikasi di versi target |
 
-**Sudah diputuskan:** tanpa MCP (D1), tanpa embedding (D2), open source MIT (D3), kriteria SIMPLE/COMPLEX (FR-14), tanpa framework adapter (FR-13 dicabut, D5), TypeScript/Node.js (D7), nama produk dan paket `scopecairn` (D8).
+**Sudah diputuskan:** tanpa MCP (D1), tanpa embedding (D2), open source MIT (D3), kriteria SIMPLE/COMPLEX (FR-14), dengan framework adapter FR-13 (D5 direvisi), TypeScript/Node.js (D7), nama produk dan paket `scopecairn` (D8).
 
 ---
 

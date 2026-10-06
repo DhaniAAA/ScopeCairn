@@ -1,13 +1,15 @@
 import fs from "node:fs";
 import path from "node:path";
 import { detectLanguage, isSourceFile } from "./languages.js";
-import { hashContent, openDb } from "./db.js";
+import { hashContent, openDb, dataDir } from "./db.js";
 import { loadIgnoreRules, isIgnored } from "./ignore.js";
 import { indexFileSymbols, indexFileRelations, indexMetaFile, linkTests } from "./indexer.js";
 import { cleanupIndex } from "./retrieval/symbolIndex.js";
 import { ensureDefaultFiles } from "./retrieval/config.js";
 import { isIndexableMetaFile } from "./scope/protected.js";
 import { runAdapters } from "./adapters/index.js";
+import { writeGraphMdIfChanged } from "./graph/export.js";
+import { buildVisualModel, renderHtml, GRAPH_HTML_NAME } from "./graph/visual.js";
 
 export interface ScanStats {
   repoRoot: string;
@@ -17,6 +19,8 @@ export interface ScanStats {
   symbols: number;
   relationships: number;
   adapters: string[];
+  graphWritten: boolean;
+  visualWritten: boolean;
   inserted: number;
   updated: number;
   unchanged: number;
@@ -169,6 +173,30 @@ export function scanRepository(repoRoot: string): ScanStats {
     linkTests(db);
     cleanupIndex(db);
 
+    // GRAPH.md: tulis ulang hanya bila graph berubah (file berubah atau
+    // adapter menambah simbol/relasi). Tanpa perubahan → file tak tersentuh.
+    const graphDirty =
+      inserted + updated + removed > 0 ||
+      adapterRun.symbols > 0 ||
+      adapterRun.relations > 0;
+    const graphWritten = writeGraphMdIfChanged(db, repoRoot, graphDirty);
+    let visualWritten = false;
+    if (graphDirty) {
+      try {
+        const model = buildVisualModel(db);
+        const html = renderHtml(
+          model,
+          path.basename(path.resolve(repoRoot)),
+          new Date().toISOString().slice(0, 19).replace("T", " ")
+        );
+        fs.mkdirSync(dataDir(repoRoot), { recursive: true });
+        fs.writeFileSync(path.join(dataDir(repoRoot), GRAPH_HTML_NAME), html);
+        visualWritten = true;
+      } catch {
+        visualWritten = false;
+      }
+    }
+
     const symbols = (
       db.prepare(`SELECT COUNT(*) AS n FROM symbols`).get() as { n: number }
     ).n;
@@ -184,6 +212,8 @@ export function scanRepository(repoRoot: string): ScanStats {
       symbols,
       relationships,
       adapters: adapterRun.adapters,
+      graphWritten,
+      visualWritten,
       inserted,
       updated,
       unchanged,

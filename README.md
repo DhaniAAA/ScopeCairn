@@ -22,6 +22,15 @@ No MCP server, no embeddings, no network calls, no telemetry.
   Definition of Done, so the agent changes only what matters.
 - **Change impact** — direct, indirect (2-hop), tests, and UI components
   affected by a file or symbol.
+- **Call path tracing** — `scopecairn path <A> <B>` shows the shortest
+  multi-hop call/dependency chain between two symbols.
+- **Centrality ranking** — weighted PageRank + betweenness cached per
+  symbol; `context` surfaces critical hotspots, `doctor` flags
+  single points of failure.
+- **Community detection** — Louvain clustering finds real modules by
+  link density (not just folders); `graph` shows each symbol's community.
+- **Cycle detection** — Tarjan SCC finds circular dependencies;
+  reported by `doctor`, warned in `context`, listed in `GRAPH.md`.
 - **Auto-refresh** — `context` and `impact` re-index changed files first;
   run `scan` after editing to close the loop.
 - **Framework adapters** — Next.js (App + Pages Router routes),
@@ -32,6 +41,22 @@ No MCP server, no embeddings, no network calls, no telemetry.
   ready), Antigravity, Cursor, Windsurf, Copilot, Kiro, and an OpenCode
   slash command. ScopeCairn never touches your `AGENTS.md`/`CLAUDE.md` —
   those hold your repo's details, not tool instructions.
+- **`GRAPH.md` knowledge file** — `.scopecairn/GRAPH.md` is a budgeted
+  (±150 lines) frozen summary of the graph (modules, most-used symbols,
+  PageRank hotspots, circular dependencies, routes, models, protected).
+  Written on setup, rewritten only when the
+  graph changes — for cold-start orientation; per-task precision still
+  comes from `context`.
+- **`GRAPH.html` visual explorer** — offline, dependency-free Canvas
+  explorer written next to `GRAPH.md` on every graph change.
+  Cluster ↔ File ↔ Symbol hierarchy toggle, live search, type filter,
+  click-for-details side panel (callers, callees, centrality scores).
+  Nodes sized by symbols/PageRank, colored by Louvain community.
+  Pan, zoom, hover inspect. Double-click to open, no server.
+- **`export` for external tools** — `scopecairn export --format
+  mermaid|graphml|dot|json` writes `.scopecairn/graph.<ext>` for PR
+  diagrams (Mermaid), Gephi/Cytoscape (GraphML), Graphviz (DOT),
+  or custom scripts (JSON).
 
 ## Install
 
@@ -90,6 +115,8 @@ scopecairn context ./                 # repository orientation map
 scopecairn impact src/request/RequestService.ts
 scopecairn read symbol approveRequest
 scopecairn graph RequestService
+scopecairn path handleLogin dbQuery
+scopecairn export --format mermaid
 scopecairn doctor
 ```
 
@@ -108,13 +135,18 @@ scopecairn agents list
 | Command | Description |
 |---|---|
 | `init [path]` | Initial indexing + Skill, Workflow, detected agent skills (`--agents …\|all`; never writes `AGENTS.md`) |
-| `scan` / `rebuild` | Manual index management (`scan` inkremental; `rebuild` dari nol) |
+| `scan` / `rebuild` / `clean` | Manual index management (`scan` incremental; `rebuild` from scratch; `clean` removes `.scopecairn/`) |
 | `status` / `doctor` | Index status (incl. adapters, invocations) and health checks |
-| `context "<task>"` | Main entry point: context + scope (`--escalate`, `--no-refresh`); a path task returns an orientation map |
+| `context "<task>"` | Main entry point: context + scope (`--escalate`, `--no-refresh`, `--mode NORMAL|FAST|SAFE|AUDIT`); a path task returns an orientation map |
 | `impact <path\|symbol>` | Change impact: direct, indirect, tests, UI, queries, routes |
-| `graph <symbol>` | Symbol relations |
+| `graph <symbol>` | Symbol relations (+ PageRank, community, cycle status) |
+| `path <from> <to>` | Shortest multi-hop call/dependency path between two symbols |
+| `export --format <fmt>` | Graph export: `mermaid`, `graphml`, `dot`, or `json` (default `.scopecairn/graph.<ext>`, override with `--out`) |
 | `read symbol <name>` | Symbol-level source excerpt (not whole files) |
 | `<agent> install` | Per-agent setup: `antigravity`, `claude`, `gemini`, `cursor`, `windsurf`, `copilot`, `kiro` (each also `uninstall`; `agents list` to see all) |
+| `dashboard` | Generate local HTML dashboard at `.scopecairn/dashboard.html` |
+| `test-select <target>` | List test files affected by a file/symbol change target |
+| `doctor --verbose` | Also surface adapter/graph errors from `.scopecairn/last-run.log` to stderr |
 | `benchmark [--tune]` | Retrieval recall, irrelevant ratio, context reduction + weight calibration |
 
 Agent commands (`context`, `impact`, `read`, `graph`, `status`, `doctor`)
@@ -131,11 +163,17 @@ No configuration needed.
 | `nextjs` | `app/`, `pages/`, `next.config.*` | Route symbols (`GET /api/x`, `PAGE /y` incl. route groups, dynamic segments), `ROUTES_TO` handler edges, `QUERIES` handler→model edges |
 | `prisma` | `schema.prisma` | `model` symbols for `QUERIES` resolution |
 | `drizzle` | `drizzle*` paths/config, `db/` schemas | `model` symbols from `pgTable`/`sqliteTable`/`mysqlTable`; `QUERIES` from `db.query.*` relational and `db.select/insert/update/delete` builder calls |
+| `express` | `package.json` deps | Route symbols from `app/router.METHOD(path)`, handler edges |
+| `fastapi` | `.py` routes, requirements/pyproject | Route symbols from `@app.METHOD("/path")` decorators |
+| `sqlalchemy` | requirements/pyproject | `model` symbols from `class X(Base)`/`__tablename__`; `QUERIES` from `session.query/select` |
+| `vue` | `.vue` SFCs, `package.json` deps | `component` symbols per SFC; `IMPORTS` edges from used components in template |
 
-Limits (honest): Server Actions, middleware, non-Prisma/Drizzle ORMs,
-inter-table references, raw SQL strings, and fully dynamic table names
-are not mapped yet — those edges are skipped silently, never hallucinated.
-QUERIES re-derive on every scan so new models resolve without a rebuild.
+Limits (honest): non-Prisma/Drizzle/SQLAlchemy ORMs, inter-table
+references, raw SQL strings, and fully dynamic table names are not mapped
+yet — those edges are skipped (and logged to `.scopecairn/last-run.log`),
+never hallucinated. Server Actions (`detectServerActions`) and middleware
+(`detectMiddleware`) are detected in `nextjs.ts`. QUERIES re-derive on
+every scan so new models resolve without a rebuild.
 Contributing a new adapter = one file + one registration line
 in `src/adapters/index.ts` (see `FrameworkAdapter` in `src/adapters/types.ts`).
 

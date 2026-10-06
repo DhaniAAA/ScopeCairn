@@ -5,10 +5,13 @@ import { retrieve } from "../retrieval/retrieve.js";
 import { classify } from "../retrieval/classify.js";
 import { buildContext } from "../retrieval/contextBuilder.js";
 import { cmdOrientasi, looksLikeRepoPath } from "./orientasi.js";
+import { loadDecisions } from "../decisions.js";
+import { changedFilesVsHead } from "../retrieval/gitChanged.js";
 
 export interface ContextOptions {
   escalate?: boolean;
   noRefresh?: boolean;
+  mode?: "NORMAL" | "FAST" | "SAFE" | "AUDIT";
 }
 
 // Entry point utama agent (PRD §8.4): satu perintah, ScopeCairn yang
@@ -82,11 +85,42 @@ export function cmdContext(
     }
     logInvocation(db, "context", taskId);
 
+    const mode = opts.mode ?? "NORMAL";
+    // Cost-aware routing: konteks kecil → FAST implisit (hindari eskalasi boros).
+    const effectiveMode =
+      mode === "NORMAL" && cls.complexity === "SIMPLE" && cls.estimatedFiles <= 1
+        ? "FAST"
+        : mode;
+    const escalate =
+      opts.escalate === true ||
+      effectiveMode === "SAFE" ||
+      effectiveMode === "AUDIT" ||
+      mode === "SAFE" ||
+      mode === "AUDIT";
+
+    const changed = changedFilesVsHead(repoRoot);
+    if (changed.length > 0) {
+      console.log(
+        `> Working tree: ${changed.length} file berubah vs HEAD (${changed
+          .slice(0, 5)
+          .join(", ")}${changed.length > 5 ? ", ..." : ""}).\n`
+      );
+    }
+
+    const decisions = loadDecisions(repoRoot);
+
     const built = buildContext(db, task, result, cls, {
-      escalate: opts.escalate,
+      escalate,
       repoRoot,
     });
-    console.log(built.markdown);
+    let out = built.markdown;
+    if (effectiveMode !== "NORMAL") {
+      out += `\n\n## Mode\n${effectiveMode}\n`;
+    }
+    if (decisions) {
+      out += `\n\n## Keputusan Arsitektur (.scopecairn/decisions.md)\n${decisions}\n`;
+    }
+    console.log(out);
   } finally {
     db.close();
   }

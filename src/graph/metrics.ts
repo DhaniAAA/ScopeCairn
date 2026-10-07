@@ -212,8 +212,17 @@ export function ensureMetrics(db: DatabaseSync): number {
   try {
     const syms = (db.prepare(`SELECT COUNT(*) AS n FROM symbols`).get() as { n: number }).n;
     if (syms === 0) return 0;
-    const c = (db.prepare(`SELECT COUNT(*) AS n FROM node_metrics`).get() as { n: number }).n;
-    if (c === syms) return c;
+    // Cache basi bila ada simbol tanpa metrik, atau metrik yatim dari
+    // simbol yang sudah dihapus/diganti (id baru setelah re-index).
+    const missing = (db.prepare(
+      `SELECT COUNT(*) AS n FROM symbols s LEFT JOIN node_metrics m ON m.node_id = s.id WHERE m.node_id IS NULL`
+    ).get() as { n: number }).n;
+    const orphans = (db.prepare(
+      `SELECT COUNT(*) AS n FROM node_metrics m LEFT JOIN symbols s ON s.id = m.node_id WHERE s.id IS NULL`
+    ).get() as { n: number }).n;
+    if (missing === 0 && orphans === 0) {
+      return (db.prepare(`SELECT COUNT(*) AS n FROM node_metrics`).get() as { n: number }).n;
+    }
     return refreshMetrics(db);
   } catch {
     return 0;

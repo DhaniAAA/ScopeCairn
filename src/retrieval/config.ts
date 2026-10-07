@@ -55,6 +55,7 @@ export function loadConfig(repoRoot: string): RetrievalConfig {
     cfg.wCochange = num("w_cochange", cfg.wCochange);
     cfg.maxDepth = Math.max(1, Math.min(4, Math.round(num("max_depth", cfg.maxDepth))));
     cfg.topN = Math.max(5, Math.min(100, Math.round(num("top_n", cfg.topN))));
+    cfg.decayPerHop = Math.max(0, Math.min(1, num("decay_per_hop", cfg.decayPerHop)));
   } catch {
     // corrupt config → defaults
   }
@@ -111,7 +112,7 @@ export function ensureDefaultFiles(repoRoot: string): void {
       cfgPath,
       `# ScopeCairn retrieval config (bobot FR-05, dikalibrasi Fase 6)\n` +
         `w_seed: 0.3\nw_proximity: 0.35\nw_centrality: 0.15\nw_recency: 0.1\nw_cochange: 0.1\n` +
-        `max_depth: 2\ntop_n: 20\n`
+        `max_depth: 2\ntop_n: 20\ndecay_per_hop: 0.7\n`
     );
   }
   const gloPath = path.join(dir, "glossary.yml");

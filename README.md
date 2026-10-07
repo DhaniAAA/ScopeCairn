@@ -66,6 +66,13 @@ npm install -g scopecairn
 
 Requires Node.js ≥ 20.
 
+Upgrade later with:
+
+```bash
+scopecairn update          # or: npm install -g scopecairn@latest
+scopecairn update --check  # only check for a new version
+```
+
 ## Agent-driven setup
 
 Install once, then just type `scopecairn ./` to your AI agent —
@@ -148,6 +155,7 @@ scopecairn agents list
 | `test-select <target>` | List test files affected by a file/symbol change target |
 | `doctor --verbose` | Also surface adapter/graph errors from `.scopecairn/last-run.log` to stderr |
 | `benchmark [--tune]` | Retrieval recall, irrelevant ratio, context reduction + weight calibration |
+| `update [--check]` | Update ScopeCairn to the latest npm release (`--check` only checks) |
 
 Agent commands (`context`, `impact`, `read`, `graph`, `status`, `doctor`)
 are read-only toward source and only write to `.scopecairn/` — safe to

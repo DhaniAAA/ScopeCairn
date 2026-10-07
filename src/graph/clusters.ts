@@ -263,9 +263,17 @@ export function ensureClusters(db: DatabaseSync): number {
   try {
     const syms = (db.prepare(`SELECT COUNT(*) AS n FROM symbols`).get() as { n: number }).n;
     if (syms === 0) return 0;
-    const c = (db.prepare(`SELECT COUNT(*) AS n FROM clusters`).get() as { n: number }).n;
-    if (c === syms) return c;
-    refreshClusters(db);
+    // Cache basi bila ada simbol tanpa cluster, atau cluster yatim dari
+    // simbol yang sudah dihapus/diganti (id baru setelah re-index).
+    const missing = (db.prepare(
+      `SELECT COUNT(*) AS n FROM symbols s LEFT JOIN clusters c ON c.node_id = s.id WHERE c.node_id IS NULL`
+    ).get() as { n: number }).n;
+    const orphans = (db.prepare(
+      `SELECT COUNT(*) AS n FROM clusters c LEFT JOIN symbols s ON s.id = c.node_id WHERE s.id IS NULL`
+    ).get() as { n: number }).n;
+    if (missing > 0 || orphans > 0) {
+      refreshClusters(db);
+    }
     return (db.prepare(`SELECT COUNT(*) AS n FROM clusters`).get() as { n: number }).n;
   } catch {
     return 0;

@@ -6,6 +6,7 @@ import { classify } from "../retrieval/classify.js";
 import { buildContext } from "../retrieval/contextBuilder.js";
 import { cmdOrientasi, looksLikeRepoPath } from "./orientasi.js";
 import { loadDecisions } from "../decisions.js";
+import { loadProtectedPatterns } from "../scope/protected.js";
 import { changedFilesVsHead } from "../retrieval/gitChanged.js";
 
 export interface ContextOptions {
@@ -22,7 +23,8 @@ export function cmdContext(
   opts: ContextOptions = {}
 ): void {
   if (!opts.noRefresh) {
-    const { stats, bulk } = refreshIndex(repoRoot);    if (bulk) {
+    const { stats, bulk } = refreshIndex(repoRoot);
+    if (bulk) {
       console.log(
         `> Note: ${stats.inserted + stats.updated} file berubah ` +
           `(mis. git pull/ganti branch). Konteks tetap dibuat; ` +
@@ -70,7 +72,7 @@ export function cmdContext(
         .get(id) as { n: number };
       return r.n;
     };
-    const cls = classify(result.ranked, faninOf);
+    const cls = classify(result.ranked, faninOf, 0.15, loadProtectedPatterns(repoRoot));
 
     // Persist untuk compliance/recall Fase 6.
     const t = db
@@ -97,6 +99,11 @@ export function cmdContext(
       effectiveMode === "AUDIT" ||
       mode === "SAFE" ||
       mode === "AUDIT";
+
+    // FAST = konteks paling ramping: ranking dipotong, anotasi ekstra dilewati.
+    if (effectiveMode === "FAST") {
+      result.ranked = result.ranked.slice(0, 8);
+    }
 
     const changed = changedFilesVsHead(repoRoot);
     if (changed.length > 0) {

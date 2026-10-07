@@ -6,7 +6,7 @@ import { loadIgnoreRules, isIgnored } from "./ignore.js";
 import { indexFileSymbols, indexFileRelations, indexMetaFile, linkTests } from "./indexer.js";
 import { cleanupIndex } from "./retrieval/symbolIndex.js";
 import { ensureDefaultFiles } from "./retrieval/config.js";
-import { isIndexableMetaFile } from "./scope/protected.js";
+import { isIndexableMetaFile, loadProtectedPatterns } from "./scope/protected.js";
 import { runAdapters } from "./adapters/index.js";
 import { writeGraphMdIfChanged } from "./graph/export.js";
 import { buildVisualModel, renderHtml, GRAPH_HTML_NAME } from "./graph/visual.js";
@@ -71,8 +71,14 @@ export function scanRepository(repoRoot: string): ScanStats {
 
     let sourceFiles = 0;
     let metaFiles = 0;
+    const protectedPatterns = loadProtectedPatterns(repoRoot);
 
     // Backfill: DBs lama tanpa graph/FTS — re-extract semuanya sekali.
+    // Hanya sekali per DB (ditandai meta.backfill_done) agar repo yang
+    // sah tanpa simbol/FTS tidak memicu full re-scan tiap scan.
+    const backfillDone = db
+      .prepare(`SELECT value FROM meta WHERE key = 'backfill_done'`)
+      .get() as { value: string } | undefined;
     const symbolCount = (
       db.prepare(`SELECT COUNT(*) AS n FROM symbols`).get() as { n: number }
     ).n;
@@ -82,7 +88,7 @@ export function scanRepository(repoRoot: string): ScanStats {
     } catch {
       ftsCount = 0;
     }
-    const backfill = symbolCount === 0 || ftsCount === 0;
+    const backfill = !backfillDone && (symbolCount === 0 || ftsCount === 0);
 
     // Two-phase indexing: phase 1 inserts symbols for all changed files,
     // phase 2 resolves relations — cross-file edges are order-independent.
@@ -96,7 +102,7 @@ export function scanRepository(repoRoot: string): ScanStats {
       // Source → ekstraksi penuh; meta (config/skema/migrasi) → simpul file saja.
       // Secret (.env, *.pem, …) tak pernah terindeks.
       const source = isSourceFile(abs);
-      const meta = !source && isIndexableMetaFile(rel);
+      const meta = !source && isIndexableMetaFile(rel, protectedPatterns);
       if (!source && !meta) continue;
       if (source) sourceFiles++;
       else metaFiles++;
@@ -167,6 +173,10 @@ export function scanRepository(repoRoot: string): ScanStats {
 
     db.prepare(
       `INSERT INTO meta(key, value) VALUES ('last_scan', datetime('now'))
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+    ).run();
+    db.prepare(
+      `INSERT INTO meta(key, value) VALUES ('backfill_done', '1')
        ON CONFLICT(key) DO UPDATE SET value = excluded.value`
     ).run();
 

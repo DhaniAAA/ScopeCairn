@@ -15,7 +15,7 @@ export function tokenizeIdentifier(raw: string): string[] {
     .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
     .toLowerCase()
     .split(/[^a-z0-9]+/g)
-    .filter((t) => t.length >= 2 && !/^\d+$/.test(t) && !STOP.has(t));
+    .filter((t) => t.length >= 2 && !STOP.has(t));
   return [...new Set(parts)];
 }
 

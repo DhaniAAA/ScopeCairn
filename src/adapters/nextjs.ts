@@ -3,6 +3,7 @@ import type {
   AdapterFile,
   AdapterResult,
   FrameworkAdapter,
+  QueryEdge,
 } from "./types.js";
 import {
   ensureAdapterSymbol,
@@ -131,6 +132,31 @@ function resolveModel(db: AdapterContext["db"], name: string): number | null {
   return findSymbolId(db, name, ["model"]) ?? dbLowerModel(db, name);
 }
 
+/** Turunkan edge QUERIES Prisma untuk satu file (tanpa menulis DB). */
+export function derivePrismaQueries(
+  db: AdapterContext["db"],
+  fileId: number,
+  content: string
+): QueryEdge[] {
+  const out: QueryEdge[] = [];
+  const fileSym = fileSymbolOf(db, fileId);
+  if (!fileSym) return out;
+  for (const call of prismaCalls(content)) {
+    const modelId = resolveModel(db, call.model);
+    if (!modelId) continue;
+    const line = lineOf(content, call.index);
+    const caller = enclosingFunction(db, fileId, line) ?? fileSym;
+    if (caller === modelId) continue;
+    out.push({
+      callerId: caller,
+      targetId: modelId,
+      weight: WEIGHT.QUERIES,
+      confidence: 0.9,
+    });
+  }
+  return out;
+}
+
 /** Hapus + turunkan ulang edge QUERIES untuk file-file ini (murah: regex). */
 export function refreshQueries(
   db: AdapterContext["db"],
@@ -142,19 +168,12 @@ export function refreshQueries(
   );
   const ins = db.prepare(
     `INSERT INTO relationships(source_id, target_id, relationship_type, weight, confidence)
-     VALUES (?, ?, 'QUERIES', ${WEIGHT.QUERIES}, 0.9)`
+     VALUES (?, ?, 'QUERIES', ?, ?)`
   );
   for (const f of files) {
-    const fileSym = fileSymbolOf(db, f.fileId);
-    if (!fileSym) continue;
     del.run(f.fileId);
-    for (const call of prismaCalls(f.content)) {
-      const modelId = resolveModel(db, call.model);
-      if (!modelId) continue;
-      const line = lineOf(f.content, call.index);
-      const caller = enclosingFunction(db, f.fileId, line) ?? fileSym;
-      if (caller === modelId) continue;
-      ins.run(caller, modelId);
+    for (const e of derivePrismaQueries(db, f.fileId, f.content)) {
+      ins.run(e.callerId, e.targetId, e.weight, e.confidence);
       n++;
     }
   }

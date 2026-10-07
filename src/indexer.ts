@@ -37,11 +37,28 @@ function symbolIdInFile(
   return r ? r.id : null;
 }
 
-function globalSymbolId(db: DatabaseSync, name: string): number | null {
-  const r = db
-    .prepare(`SELECT id FROM symbols WHERE name = ? LIMIT 1`)
-    .get(name) as { id: number } | undefined;
-  return r ? r.id : null;
+// Resolusi nama global: prefer simbol di direktori yang sama dengan file
+// sumber, lalu top-level dir yang sama; fallback id terkecil (deterministik).
+function globalSymbolId(
+  db: DatabaseSync,
+  name: string,
+  preferDir = ""
+): number | null {
+  const rows = db
+    .prepare(
+      `SELECT s.id, f.path AS p FROM symbols s JOIN files f ON f.id = s.file_id
+       WHERE s.name = ? ORDER BY s.id`
+    )
+    .all(name) as { id: number; p: string }[];
+  if (rows.length === 0) return null;
+  if (preferDir) {
+    const sameDir = rows.find((r) => r.p.startsWith(preferDir + "/"));
+    if (sameDir) return sameDir.id;
+    const top = preferDir.split("/")[0];
+    const sameTop = rows.find((r) => r.p.split("/")[0] === top);
+    if (sameTop) return sameTop.id;
+  }
+  return rows[0].id;
 }
 
 // Resolusi method call (`obj.name(`): hanya ke simbol method/component.
@@ -159,9 +176,14 @@ export function indexFileRelations(
     rels++;
   }
 
+  const srcDir = relPath.includes("/")
+    ? relPath.slice(0, relPath.lastIndexOf("/"))
+    : "";
   const resolveLocal = (name: string): number | null => {
     if (name === "__file__") return fileSym;
-    return ids.get(name) ?? symbolIdInFile(db, fileId, name) ?? globalSymbolId(db, name);
+    return (
+      ids.get(name) ?? symbolIdInFile(db, fileId, name) ?? globalSymbolId(db, name, srcDir)
+    );
   };
 
   for (const r of extraction.relations) {
@@ -193,7 +215,7 @@ export function indexFileRelations(
     const dst =
       r.rel === "CALLS" && r.methodCall
         ? methodSymbolId(db, fileId, ids, r.to)
-        : (ids.get(r.to) ?? globalSymbolId(db, r.to));
+        : (ids.get(r.to) ?? globalSymbolId(db, r.to, srcDir));
     if (src && dst && src !== dst) {
       insRel.run(src, dst, r.rel, r.weight, r.confidence);
       rels++;
@@ -248,10 +270,12 @@ export function linkTests(db: DatabaseSync): number {
   for (const f of files) {
     const stemBase = testTarget(f.path);
     if (!stemBase) continue;
-    // Match stem with any known extension, same dir first.
+    // Cocokkan stem basename: tests/cycles.test.ts → cycles di src/... mana pun.
+    const stemName = stemBase.split("/").pop()!;
     const matches = [...byPath.keys()].filter((p) => {
-      const noExt = p.replace(/\.[^.]+$/, "");
-      return noExt === stemBase && p !== f.path;
+      if (p === f.path || testTarget(p)) return false;
+      const base = p.split("/").pop() ?? p;
+      return base.replace(/\.[^.]+$/, "") === stemName;
     });
     const srcSym = fileSymOf(f.id);
     for (const mp of matches) {

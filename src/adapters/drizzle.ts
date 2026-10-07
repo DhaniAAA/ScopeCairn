@@ -5,6 +5,7 @@ import type {
   AdapterFile,
   AdapterResult,
   FrameworkAdapter,
+  QueryEdge,
 } from "./types.js";
 import {
   enclosingFunction,
@@ -106,6 +107,31 @@ function hasDrizzleMarker(content: string): boolean {
   return /db\s*\.\s*(select|selectDistinct|insert|update|delete)\b/.test(content);
 }
 
+/** Turunkan edge QUERIES Drizzle untuk satu file (tanpa menulis DB). */
+export function deriveDrizzleQueries(
+  db: AdapterContext["db"],
+  fileId: number,
+  content: string
+): QueryEdge[] {
+  const out: QueryEdge[] = [];
+  const fileSym = fileSymbolOf(db, fileId);
+  if (!fileSym) return out;
+  for (const q of parseDrizzleQueries(content)) {
+    const target =
+      findModelInFile(db, fileId, q.table) ?? findModelGlobal(db, q.table);
+    if (!target) continue;
+    const caller = enclosingFunction(db, fileId, lineOf(content, q.index)) ?? fileSym;
+    if (caller === target) continue;
+    out.push({
+      callerId: caller,
+      targetId: target,
+      weight: WEIGHT.QUERIES,
+      confidence: 0.85,
+    });
+  }
+  return out;
+}
+
 /** Hapus + turunkan ulang edge QUERIES (anti-basi, pola nextjs). */
 export function refreshDrizzleQueries(
   db: AdapterContext["db"],
@@ -117,19 +143,13 @@ export function refreshDrizzleQueries(
   );
   const ins = db.prepare(
     `INSERT INTO relationships(source_id, target_id, relationship_type, weight, confidence)
-     VALUES (?, ?, 'QUERIES', ${WEIGHT.QUERIES}, 0.85)`
+     VALUES (?, ?, 'QUERIES', ?, ?)`
   );
   for (const f of files) {
-    const fileSym = fileSymbolOf(db, f.fileId);
-    if (!fileSym || !hasDrizzleMarker(f.content)) continue;
+    if (!hasDrizzleMarker(f.content)) continue;
     del.run(f.fileId);
-    for (const q of parseDrizzleQueries(f.content)) {
-      const target =
-        findModelInFile(db, f.fileId, q.table) ?? findModelGlobal(db, q.table);
-      if (!target) continue;
-      const caller = enclosingFunction(db, f.fileId, lineOf(f.content, q.index)) ?? fileSym;
-      if (caller === target) continue;
-      ins.run(caller, target);
+    for (const e of deriveDrizzleQueries(db, f.fileId, f.content)) {
+      ins.run(e.callerId, e.targetId, e.weight, e.confidence);
       n++;
     }
   }

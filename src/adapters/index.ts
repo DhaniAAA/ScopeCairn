@@ -1,13 +1,17 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import type { AdapterFile, FrameworkAdapter } from "./types.js";
+import type { AdapterFile, FrameworkAdapter, QueryEdge } from "./types.js";
+import { cleanupOrphans } from "./types.js";
 import { prismaAdapter } from "./prisma.js";
-import { nextjsAdapter, refreshQueries } from "./nextjs.js";
-import { drizzleAdapter, refreshDrizzleQueries } from "./drizzle.js";
+import { nextjsAdapter, derivePrismaQueries } from "./nextjs.js";
+import { drizzleAdapter, deriveDrizzleQueries } from "./drizzle.js";
 import { expressAdapter } from "./express.js";
 import { fastapiAdapter } from "./fastapi.js";
-import { sqlalchemyAdapter, refreshSqlAlchemyQueries } from "./sqlalchemy.js";
+import {
+  sqlalchemyAdapter,
+  deriveSqlAlchemyQueries,
+} from "./sqlalchemy.js";
 import { vueAdapter } from "./vue.js";
 import { syncFileIndex } from "../retrieval/symbolIndex.js";
 import { logError } from "../log.js";
@@ -88,40 +92,67 @@ export function runAdapters(
       }
     }
   }
-  // QUERIES anti-basi: turunkan ulang atas SEMUA file relevan
-  // (murah: regex), agar model/tabel baru langsung ter-resolve tanpa rebuild.
-  const refreshTargets = (
-    id: string,
-    relevant: (rel: string) => boolean,
-    refresh: (
+  // QUERIES anti-basi: satu pass terpadu atas SEMUA file relevan.
+  // Per-file edge QUERIES dihapus lalu diturunkan ulang dari SEMUA
+  // parser query aktif. Refresh per-adapter akan menghapus edge
+  // adapter lain (mis. Prisma + Drizzle dalam satu repo JS).
+  const derivers: {
+    relevant: (rel: string) => boolean;
+    derive: (
       db: DatabaseSync,
-      files: { fileId: number; rel: string; content: string }[]
-    ) => number
-  ): void => {
-    if (!active.some((a) => a.id === id)) return;
+      fileId: number,
+      content: string
+    ) => QueryEdge[];
+  }[] = [];
+  if (active.some((a) => a.id === "nextjs")) {
+    derivers.push({ relevant: nextjsAdapter.relevant, derive: derivePrismaQueries });
+  }
+  if (active.some((a) => a.id === "drizzle")) {
+    derivers.push({ relevant: drizzleAdapter.relevant, derive: deriveDrizzleQueries });
+  }
+  if (active.some((a) => a.id === "sqlalchemy")) {
+    derivers.push({
+      relevant: sqlalchemyAdapter.relevant,
+      derive: deriveSqlAlchemyQueries,
+    });
+  }
+  if (derivers.length > 0) {
     try {
-      const all = (
-        db.prepare(`SELECT id, path FROM files`).all() as { id: number; path: string }[]
-      ).filter((r) => relevant(r.path));
-      const inputs: { fileId: number; rel: string; content: string }[] = [];
+      const all = db
+        .prepare(`SELECT id, path FROM files`)
+        .all() as { id: number; path: string }[];
+      const del = db.prepare(
+        `DELETE FROM relationships WHERE relationship_type = 'QUERIES' AND source_id IN (SELECT id FROM symbols WHERE file_id = ?)`
+      );
+      const ins = db.prepare(
+        `INSERT INTO relationships(source_id, target_id, relationship_type, weight, confidence)
+         VALUES (?, ?, 'QUERIES', ?, ?)`
+      );
       for (const r of all) {
+        if (!derivers.some((d) => d.relevant(r.path))) continue;
+        let content: string;
         try {
-          inputs.push({
-            fileId: r.id,
-            rel: r.path,
-            content: fs.readFileSync(path.join(repoRoot, ...r.path.split("/")), "utf8"),
-          });
+          content = fs.readFileSync(path.join(repoRoot, ...r.path.split("/")), "utf8");
         } catch {
-          // hilang di disk — lewati
+          continue;
+        }
+        del.run(r.id);
+        for (const d of derivers) {
+          for (const e of d.derive(db, r.id, content)) {
+            ins.run(e.callerId, e.targetId, e.weight, e.confidence);
+            relations++;
+          }
         }
       }
-      relations += refresh(db, inputs);
     } catch (err) {
       logError("adapters", err, repoRoot);
     }
-  };
-  refreshTargets("nextjs", nextjsAdapter.relevant, refreshQueries);
-  refreshTargets("drizzle", drizzleAdapter.relevant, refreshDrizzleQueries);
-  refreshTargets("sqlalchemy", sqlalchemyAdapter.relevant, refreshSqlAlchemyQueries);
+  }
+  // Jaring pengaman: buang edge/metrik yang menunjuk simbol hilang.
+  try {
+    cleanupOrphans(db);
+  } catch (err) {
+    logError("adapters", err, repoRoot);
+  }
   return { adapters: active.map((a) => a.id), symbols, relations };
 }

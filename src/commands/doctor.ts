@@ -102,7 +102,13 @@ export async function cmdDoctor(repoRoot: string, opts?: { verbose?: boolean }):
   for (const t of AGENT_MATRIX) {
     const abs = path.join(repoRoot, t.rel);
     if (!fs.existsSync(abs)) continue;
-    const text = fs.readFileSync(abs, "utf8");
+    let text: string;
+    try {
+      text = fs.readFileSync(abs, "utf8");
+    } catch {
+      console.log(`✗ Tidak bisa membaca ${t.rel} — dilewati.`);
+      continue;
+    }
     if (t.mode === "merge" && !text.includes(MARKER)) continue;
     matrixOk++;
     const used = extractPrefixUsed(text);

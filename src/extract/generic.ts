@@ -90,7 +90,9 @@ export function extractGeneric(source: string, lang: SourceLanguage): FileExtrac
   // --- imports
   const importLine = /^\s*import\s+(.+?)\s*$/gm;
   while ((m = importLine.exec(source)) !== null) {
-    const mod = m[1].replace(/["';]/g, "").trim().split(/\s+/)[0];
+    // Go: `import f "fmt"` — ambil path paket dalam kutip, bukan alias.
+    const goPath = lang === "go" ? m[1].match(/["`]([^"`]+)["`]/) : null;
+    const mod = (goPath ? goPath[1] : m[1].replace(/["';]/g, "").trim().split(/\s+/)[0]);
     if (!mod || mod === "*") continue;
     const ln = lineOf(source, m.index);
     symbols.push({ name: `import:${mod}`, type: "import", signature: m[0].trim().slice(0, 120), startLine: ln, endLine: ln });

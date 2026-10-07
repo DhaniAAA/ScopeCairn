@@ -128,14 +128,17 @@ const META_BASENAMES = new Set([
 
 // File non-source yang tetap terindeks sebagai simpul file (tanpa isi):
 // config, skema, migrasi — agar Protected/scope/impact melihatnya.
-export function isIndexableMetaFile(posixPath: string): boolean {
+export function isIndexableMetaFile(
+  posixPath: string,
+  patterns?: string[]
+): boolean {
   if (isSecretFile(posixPath)) return false;
   const base = (posixPath.split("/").pop() ?? "").toLowerCase();
   if (META_BASENAMES.has(base)) return true;
   const dot = base.lastIndexOf(".");
   if (dot !== -1 && META_EXTS.has(base.slice(dot))) return true;
   // Cocok pola Protected (mis. migrations/**) juga ikut terindeks.
-  if (isProtected(posixPath)) return true;
+  if (patterns ? isProtected(posixPath, patterns) : isProtected(posixPath)) return true;
   return false;
 }
 

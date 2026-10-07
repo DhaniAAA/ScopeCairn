@@ -119,7 +119,7 @@ export function uninstallTarget(repoRoot: string, target: AgentTarget): InstallO
 
 function pruneEmptyDirs(dir: string, stop: string): void {
   let cur = dir;
-  while (cur.startsWith(stop) && cur !== stop) {
+  while (cur !== stop && cur.toLowerCase().startsWith(stop.toLowerCase())) {
     try {
       fs.rmdirSync(cur);
     } catch {

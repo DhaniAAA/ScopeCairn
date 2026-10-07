@@ -15,6 +15,7 @@ import { cmdInit } from "./commands/init.js";
 import { cmdBenchmark } from "./commands/benchmark.js";
 import { cmdDashboard } from "./commands/dashboard.js";
 import { cmdTestSelect } from "./commands/testselect.js";
+import { cmdUpdate } from "./commands/update.js";
 import { registerAgentCommands } from "./commands/agents.js";
 import pkg from "../package.json" with { type: "json" };
 
@@ -153,6 +154,12 @@ program
   .action((opts: { tune?: boolean; noRefresh?: boolean }) =>
     cmdBenchmark(repoRoot(), opts)
   );
+
+program
+  .command("update")
+  .description("Update scopecairn ke versi terbaru dari npm registry")
+  .option("--check", "hanya cek versi terbaru tanpa menginstall")
+  .action((opts: { check?: boolean }) => cmdUpdate(opts));
 
 registerAgentCommands(program, repoRoot);
 

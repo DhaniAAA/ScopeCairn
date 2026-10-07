@@ -4,7 +4,7 @@
 import { execSync } from "node:child_process";
 import fs from "node:fs";
 
-function run(cmd: string): string {
+function run(cmd) {
   try {
     return execSync(cmd, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
   } catch {

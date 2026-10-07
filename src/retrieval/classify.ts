@@ -24,7 +24,8 @@ function moduleOf(file: string): string {
 export function classify(
   ranked: RankedSymbol[],
   faninOf: (id: number) => number,
-  threshold = 0.15
+  threshold = 0.15,
+  protectedPatterns?: string[]
 ): Classification {
   const relevant = ranked.filter((r) => r.score >= threshold);
   const files = [...new Set(relevant.map((r) => r.file))];
@@ -42,7 +43,9 @@ export function classify(
   const highFanin = relevant
     .filter((r) => DEFINITIONAL.has(r.type) && faninOf(r.id) >= FANIN_THRESHOLD)
     .map((r) => r.name);
-  const protectedHits = files.filter((f) => isProtected(f));
+  const protectedHits = files.filter((f) =>
+    protectedPatterns ? isProtected(f, protectedPatterns) : isProtected(f)
+  );
 
   let complexity: "SIMPLE" | "COMPLEX" = "SIMPLE";
   if (files.length >= 3) {

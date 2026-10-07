@@ -12,9 +12,9 @@ export function extractFile(relPath: string, source: string): FileExtraction {
   const lang = detectLanguage(relPath);
   switch (lang) {
     case "typescript":
-      return extractTypeScript(source, relPath.endsWith("x"));
+      return extractTypeScript(source, relPath.endsWith(".tsx"));
     case "javascript":
-      return extractTypeScript(source, relPath.endsWith("x"));
+      return extractTypeScript(source, relPath.endsWith(".jsx"));
     case "python":
       return extractPython(source);
     case "html":

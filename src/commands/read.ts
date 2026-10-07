@@ -34,8 +34,8 @@ export function cmdRead(repoRoot: string, kind: string, name: string): void {
       console.log(`Cannot read ${node.file}.`);
       return;
     }
-    // Excerpt window: def line ± context (def line + up to 40 lines).
-    const start = Math.max(1, row.start_line - 1);
+    // Excerpt window: mulai dari baris definisi (1-based), def line s/d +40.
+    const start = row.start_line;
     const end = Math.min(lines.length, Math.max(row.end_line, row.start_line + 40));
     console.log(`# ${node.name} (${node.type}) — ${node.file}:${start}-${end}`);
     console.log(lines.slice(start - 1, end).join("\n"));

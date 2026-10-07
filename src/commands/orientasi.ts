@@ -37,9 +37,10 @@ export function looksLikeRepoPath(
     // bukan path fs — cek index
   }
   try {
+    const esc = t.replace(/[\\%_]/g, (c) => "\\" + c);
     const row = db
-      .prepare(`SELECT 1 AS ok FROM files WHERE path = ? OR path LIKE ? LIMIT 1`)
-      .get(t, `%/${t}`);
+      .prepare(`SELECT 1 AS ok FROM files WHERE path = ? OR path LIKE ? ESCAPE '\\' LIMIT 1`)
+      .get(t, `%/${esc}`);
     return !!row;
   } catch {
     return false;

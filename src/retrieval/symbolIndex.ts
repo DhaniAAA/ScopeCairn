@@ -50,10 +50,12 @@ export function seedSearch(
     .join(" OR ");
   let rows: { symbol_id: number; rank: number }[];
   try {
+    const lim = Math.max(1, Math.min(500, Math.floor(limit) || 30));
     rows = db
       .prepare(
         `SELECT symbol_id, bm25(symbol_index) AS rank
-         FROM symbol_index WHERE symbol_index MATCH ? LIMIT ${limit}`
+         FROM symbol_index WHERE symbol_index MATCH ?
+         ORDER BY rank LIMIT ${lim}`
       )
       .all(q) as { symbol_id: number; rank: number }[];
   } catch {

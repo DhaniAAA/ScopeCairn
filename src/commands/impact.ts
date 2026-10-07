@@ -26,9 +26,9 @@ export function cmdImpact(
       const rows = db
         .prepare(
           `SELECT s.id, s.name, s.type, f.path AS file FROM symbols s
-           JOIN files f ON f.id = s.file_id WHERE f.path LIKE ? LIMIT 20`
+           JOIN files f ON f.id = s.file_id WHERE f.path LIKE ? ESCAPE '\\' LIMIT 20`
         )
-        .all(`%${target}`) as { id: number; name: string; type: string; file: string }[];
+        .all(`%${target.replace(/[\\%_]/g, (c) => "\\" + c)}`) as { id: number; name: string; type: string; file: string }[];
       seeds = rows;
     }
     if (seeds.length === 0) {

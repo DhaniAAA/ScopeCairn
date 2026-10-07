@@ -80,8 +80,10 @@ function resolveImportRel(fromRel: string, source: string): string | null {
   const out: string[] = [];
   for (const p of parts) {
     if (p === "" || p === ".") continue;
-    if (p === "..") out.pop();
-    else out.push(p);
+    if (p === "..") {
+      if (out.length === 0) return null; // keluar dari root repo — tidak valid
+      out.pop();
+    } else out.push(p);
   }
   return out.join("/");
 }

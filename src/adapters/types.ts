@@ -127,3 +127,52 @@ export function enclosingFunction(
     .all(fileId, line) as { id: number; name: string }[];
   return rows.length > 0 ? rows[0].id : null;
 }
+
+/** Edge QUERIES yang diturunkan dari isi sebuah file. */
+export interface QueryEdge {
+  callerId: number;
+  targetId: number;
+  weight: number;
+  confidence: number;
+}
+
+/**
+ * Hapus relasi yang menunjuk simbol tak lagi ada. Jaring pengaman
+ * anti-orphan: FK ON DELETE CASCADE sudah aktif bila koneksi memakai
+ * PRAGMA foreign_keys = ON (openDb melakukannya), tetapi DB lama atau
+ * koneksi tanpa pragma bisa meninggalkan edge/node terlantar.
+ */
+export function cleanupOrphans(db: DatabaseSync): number {
+  let n = 0;
+  n += Number(
+    db
+      .prepare(
+        `DELETE FROM relationships
+         WHERE source_id NOT IN (SELECT id FROM symbols)
+            OR target_id NOT IN (SELECT id FROM symbols)`
+      )
+      .run().changes
+  );
+  n += Number(
+    db
+      .prepare(
+        `DELETE FROM node_metrics WHERE node_id NOT IN (SELECT id FROM symbols)`
+      )
+      .run().changes
+  );
+  n += Number(
+    db
+      .prepare(
+        `DELETE FROM clusters WHERE node_id NOT IN (SELECT id FROM symbols)`
+      )
+      .run().changes
+  );
+  n += Number(
+    db
+      .prepare(
+        `DELETE FROM task_context WHERE symbol_id NOT IN (SELECT id FROM symbols)`
+      )
+      .run().changes
+  );
+  return n;
+}

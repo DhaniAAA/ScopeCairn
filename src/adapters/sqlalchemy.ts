@@ -5,6 +5,7 @@ import type {
   AdapterFile,
   AdapterResult,
   FrameworkAdapter,
+  QueryEdge,
 } from "./types.js";
 import {
   enclosingFunction,
@@ -78,6 +79,31 @@ function findModelGlobal(db: AdapterContext["db"], name: string): number | null 
   return rows.find((r) => r.name.toLowerCase() === lower)?.id ?? null;
 }
 
+/** Turunkan edge QUERIES SQLAlchemy untuk satu file (tanpa menulis DB). */
+export function deriveSqlAlchemyQueries(
+  db: AdapterContext["db"],
+  fileId: number,
+  content: string
+): QueryEdge[] {
+  const out: QueryEdge[] = [];
+  const fileSym = fileSymbolOf(db, fileId);
+  if (!fileSym) return out;
+  for (const q of parseSqlAlchemyQueries(content)) {
+    const target = findModelGlobal(db, q.model);
+    if (!target) continue;
+    const caller =
+      enclosingFunction(db, fileId, lineOf(content, q.index)) ?? fileSym;
+    if (caller === target) continue;
+    out.push({
+      callerId: caller,
+      targetId: target,
+      weight: WEIGHT.QUERIES,
+      confidence: 0.85,
+    });
+  }
+  return out;
+}
+
 /** Hapus + turunkan ulang edge QUERIES untuk file-file ini (murah: regex). */
 export function refreshSqlAlchemyQueries(
   db: AdapterContext["db"],
@@ -89,19 +115,13 @@ export function refreshSqlAlchemyQueries(
   );
   const ins = db.prepare(
     `INSERT INTO relationships(source_id, target_id, relationship_type, weight, confidence)
-     VALUES (?, ?, 'QUERIES', ${WEIGHT.QUERIES}, 0.85)`
+     VALUES (?, ?, 'QUERIES', ?, ?)`
   );
   for (const f of files) {
     if (!hasSqlAlchemyMarker(f.content)) continue;
-    const fileSym = fileSymbolOf(db, f.fileId);
-    if (!fileSym) continue;
     del.run(f.fileId);
-    for (const q of parseSqlAlchemyQueries(f.content)) {
-      const target = findModelGlobal(db, q.model);
-      if (!target) continue;
-      const caller = enclosingFunction(db, f.fileId, lineOf(f.content, q.index)) ?? fileSym;
-      if (caller === target) continue;
-      ins.run(caller, target);
+    for (const e of deriveSqlAlchemyQueries(db, f.fileId, f.content)) {
+      ins.run(e.callerId, e.targetId, e.weight, e.confidence);
       n++;
     }
   }
@@ -160,28 +180,10 @@ export const sqlalchemyAdapter: FrameworkAdapter = {
       }
     }
     // QUERIES anti-basi: turunkan ulang untuk file yang disentuh.
-    const del = ctx.db.prepare(
-      `DELETE FROM relationships WHERE relationship_type = 'QUERIES' AND source_id IN (SELECT id FROM symbols WHERE file_id = ?)`
+    relations += refreshSqlAlchemyQueries(
+      ctx.db,
+      files.map((f) => ({ fileId: f.fileId, rel: f.rel, content: f.content }))
     );
-    const ins = ctx.db.prepare(
-      `INSERT INTO relationships(source_id, target_id, relationship_type, weight, confidence)
-       VALUES (?, ?, 'QUERIES', ${WEIGHT.QUERIES}, 0.85)`
-    );
-    for (const f of files) {
-      if (!hasSqlAlchemyMarker(f.content)) continue;
-      const fileSym = fileSymbolOf(ctx.db, f.fileId);
-      if (!fileSym) continue;
-      del.run(f.fileId);
-      for (const q of parseSqlAlchemyQueries(f.content)) {
-        const target = findModelGlobal(ctx.db, q.model);
-        if (!target) continue;
-        const caller =
-          enclosingFunction(ctx.db, f.fileId, lineOf(f.content, q.index)) ?? fileSym;
-        if (caller === target) continue;
-        ins.run(caller, target);
-        relations++;
-      }
-    }
     return { symbols, relations };
   },
 };

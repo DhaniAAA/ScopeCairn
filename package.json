@@ -34,7 +34,8 @@
     "clean": "tsx src/cli.ts clean",
     "rebuild": "tsx src/cli.ts rebuild",
     "test": "tsx --test tests/*.test.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "changelog": "node scripts/changelog.js"
   },
   "dependencies": {
     "commander": "^12.1.0",

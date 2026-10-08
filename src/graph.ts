@@ -11,6 +11,7 @@ export interface GraphEdge {
   rel: string;
   weight: number;
   confidence: number;
+  evidence: string;
   other: GraphNode;
   direction: "out" | "in";
 }
@@ -49,7 +50,7 @@ export function neighbors(
   limit = 50
 ): GraphEdge[] {  const out = db
     .prepare(
-      `SELECT r.relationship_type AS rel, r.weight, r.confidence,
+      `SELECT r.relationship_type AS rel, r.weight, r.confidence, r.evidence AS evidence,
               t.id, t.name, t.type, f.path AS file
        FROM relationships r JOIN symbols t ON t.id = r.target_id
        JOIN files f ON f.id = t.file_id
@@ -58,7 +59,7 @@ export function neighbors(
     .all(id) as Record<string, unknown>[];
   const inn = db
     .prepare(
-      `SELECT r.relationship_type AS rel, r.weight, r.confidence,
+      `SELECT r.relationship_type AS rel, r.weight, r.confidence, r.evidence AS evidence,
               s.id, s.name, s.type, f.path AS file
        FROM relationships r JOIN symbols s ON s.id = r.source_id
        JOIN files f ON f.id = s.file_id
@@ -70,6 +71,7 @@ export function neighbors(
       rel: r["rel"] as string,
       weight: r["weight"] as number,
       confidence: r["confidence"] as number,
+      evidence: (r["evidence"] as string) ?? "EXTRACTED",
       other: asNode(r),
       direction: "out" as const,
     })),
@@ -77,6 +79,7 @@ export function neighbors(
       rel: r["rel"] as string,
       weight: r["weight"] as number,
       confidence: r["confidence"] as number,
+      evidence: (r["evidence"] as string) ?? "EXTRACTED",
       other: asNode(r),
       direction: "in" as const,
     })),

@@ -12,11 +12,11 @@ export interface InitOptions {
 // `scopecairn init` (AI-1): indexing awal + Skill/Workflow Antigravity +
 // matriks agent yang diminta/terdeteksi. TIDAK menulis AGENTS.md/CLAUDE.md:
 // file itu milik detail repo user — distribusi lewat skill tiap agent.
-export function cmdInit(repoRoot: string, opts: InitOptions = {}): void {
+export async function cmdInit(repoRoot: string, opts: InitOptions = {}): Promise<void> {
   console.log("ScopeCairn");
   console.log("✓ Repository detected");
 
-  const stats = scanRepository(repoRoot);
+  const stats = await scanRepository(repoRoot);
   console.log(`✓ ${stats.sourceFiles} source files`);
   if (stats.metaFiles > 0) console.log(`✓ ${stats.metaFiles} config/schema files`);
   console.log(`✓ ${stats.symbols} symbols`);

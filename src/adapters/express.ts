@@ -11,9 +11,11 @@ import {
   ensureAdapterSymbol,
   fileSymbolOf,
   insertRelation,
-  lineOf,
 } from "./types.js";
 import { WEIGHT } from "../extract/types.js";
+import { withSyntaxTree } from "../treesitter.js";
+import { grammarForPath } from "../extract/treeSitter.js";
+import type { Node } from "web-tree-sitter";
 
 // Adapter Express: `app.get/post/put/delete/patch/use(path, handler)`
 // (dan analog `router.*`) menjadi simbol `route` + edge file→handler.
@@ -28,24 +30,37 @@ export interface ExpressRoute {
   line: number;
 }
 
+function expressRoutes(content: string, grammar: string): ExpressRoute[] {
+  return withSyntaxTree(grammar, content, (root) => {
+    const out: ExpressRoute[] = [];
+    const visit = (node: Node) => {
+      if (node.type === "call_expression") {
+        const callee = node.childForFieldName("function");
+        const receiver = callee?.childForFieldName("object");
+        const method = callee?.childForFieldName("property")?.text;
+        const args = node.childForFieldName("arguments")?.namedChildren ?? [];
+        const path = args[0];
+        if (callee?.type === "member_expression" && receiver?.type === "identifier" &&
+            (receiver.text === "app" || receiver.text === "router") && method && METHODS.includes(method) &&
+            (path?.type === "string" || path?.type === "template_string" && !path.namedChildren.some((child) => child?.type === "template_substitution")) &&
+            path.text.length > 2 && args.length > 1) {
+          out.push({
+            method: method.toUpperCase(),
+            path: path.text.slice(1, -1),
+            handler: args[1]?.type === "identifier" ? args[1].text : null,
+            line: node.startPosition.row + 1,
+          });
+        }
+      }
+      for (const child of node.namedChildren) if (child) visit(child);
+    };
+    visit(root);
+    return out;
+  });
+}
+
 export function parseExpressRoutes(content: string): ExpressRoute[] {
-  const out: ExpressRoute[] = [];
-  const re = new RegExp(
-    `\\b(?:app|router)\\s*\\.\\s*(${METHODS.join("|")})\\s*\\(\\s*["'\`]([^"'\`]+)["'\`]\\s*,\\s*([^,)\\s]+)?`,
-    "g"
-  );
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(content)) !== null) {
-    const rawHandler = m[3] ?? null;
-    const handler = rawHandler && /^[A-Za-z_$][\w$]*$/.test(rawHandler) ? rawHandler : null;
-    out.push({
-      method: m[1].toUpperCase(),
-      path: m[2],
-      handler,
-      line: lineOf(content, m.index),
-    });
-  }
-  return out;
+  return expressRoutes(content, "typescript");
 }
 
 function hasExpressMarker(content: string): boolean {
@@ -91,7 +106,7 @@ export const expressAdapter: FrameworkAdapter = {
       if (!hasExpressMarker(f.content)) continue;
       const fileSym = fileSymbolOf(ctx.db, f.fileId);
       if (!fileSym) continue;
-      for (const r of parseExpressRoutes(f.content)) {
+      for (const r of expressRoutes(f.content, grammarForPath(f.rel) ?? "typescript")) {
         const routeId = ensureAdapterSymbol(ctx.db, f.fileId, {
           name: `${r.method} ${r.path}`,
           type: "route",

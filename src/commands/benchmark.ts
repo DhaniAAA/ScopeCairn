@@ -6,11 +6,11 @@ import { gitSignals } from "../retrieval/git.js";
 
 // Benchmark & kalibrasi (PRD §18). Tanpa LLM: recall, irrelevant ratio,
 // estimasi context reduction, dan grid search bobot FR-05.
-export function cmdBenchmark(
+export async function cmdBenchmark(
   repoRoot: string,
   opts: { tune?: boolean; noRefresh?: boolean } = {}
-): void {
-  if (!opts.noRefresh) refreshIndex(repoRoot);
+): Promise<void> {
+  if (!opts.noRefresh) await refreshIndex(repoRoot);
   const db = openDb(repoRoot);
   try {
     const fileCount = (

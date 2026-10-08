@@ -11,6 +11,7 @@ export type SourceLanguage =
   | "c"
   | "ruby"
   | "html"
+  | "vue"
   | "other";
 
 const EXT_MAP: Record<string, SourceLanguage> = {
@@ -38,6 +39,7 @@ const EXT_MAP: Record<string, SourceLanguage> = {
   ".rb": "ruby",
   ".html": "html",
   ".htm": "html",
+  ".vue": "vue",
 };
 
 export function detectLanguage(filePath: string): SourceLanguage {

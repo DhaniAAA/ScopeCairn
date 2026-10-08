@@ -11,7 +11,7 @@ import { ensureAdapterSymbol, fileSymbolOf, insertRelation } from "./types.js";
 // `prisma.request.findMany()` → model `Request` (case-insensitive:
 // client memakai camelCase dari nama model PascalCase).
 
-export function parsePrismaModels(content: string): { name: string; line: number }[] {
+function parsePrismaModelsRegex(content: string): { name: string; line: number }[] {
   const out: { name: string; line: number }[] = [];
   const re = /^model\s+(\w+)\s*\{/gm;
   let m: RegExpExecArray | null;
@@ -19,6 +19,10 @@ export function parsePrismaModels(content: string): { name: string; line: number
     out.push({ name: m[1], line: content.slice(0, m.index).split("\n").length });
   }
   return out;
+}
+
+export function parsePrismaModels(content: string): { name: string; line: number }[] {
+  return parsePrismaModelsRegex(content);
 }
 
 export const prismaAdapter: FrameworkAdapter = {

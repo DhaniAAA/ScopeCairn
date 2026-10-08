@@ -8,6 +8,8 @@ import type {
 } from "./types.js";
 import { ensureAdapterSymbol, fileSymbolOf, insertRelation, lineOf } from "./types.js";
 import { WEIGHT } from "../extract/types.js";
+import { withSyntaxTree } from "../treesitter.js";
+import type { Node } from "web-tree-sitter";
 
 // Adapter Vue SFC: simbol `component` dari nama file .vue (dan
 // `defineComponent({...})`); komponen yang di-import lalu dipakai di
@@ -22,26 +24,57 @@ export interface VueComponentImport {
   line: number;
 }
 
+function scripts(content: string): { text: string; line: number }[] {
+  return withSyntaxTree("vue", content, (root) => root.namedChildren
+    .filter((child): child is Node => child?.type === "script_element")
+    .flatMap((child) => child.namedChildren
+      .filter((part): part is Node => part?.type === "raw_text")
+      .map((part) => ({ text: part.text, line: part.startPosition.row }))));
+}
+
 export function parseVueImports(content: string): VueComponentImport[] {
   const out: VueComponentImport[] = [];
-  const re = /import\s+(\w+)\s+from\s+["']([^"']+\.vue)["']/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(content)) !== null) {
-    out.push({ name: m[1], source: m[2], line: lineOf(content, m.index) });
+  for (const script of scripts(content)) {
+    try {
+      out.push(...withSyntaxTree("javascript", script.text, (root) => {
+        const imports: VueComponentImport[] = [];
+        for (const node of root.namedChildren) {
+          if (node?.type !== "import_statement") continue;
+          const source = node.childForFieldName("source");
+          const clause = node.namedChildren.find((child) => child?.type === "import_clause");
+          const name = clause?.namedChildren.find((child) => child?.type === "identifier")?.text;
+          if (name && source?.type === "string" && source.text.slice(1, -1).endsWith(".vue")) {
+            imports.push({ name, source: source.text.slice(1, -1), line: script.line + node.startPosition.row + 1 });
+          }
+        }
+        return imports;
+      }));
+    } catch (error) {
+      if (!(error instanceof Error) || !error.message.startsWith("Grammar javascript belum siap")) throw error;
+      const re = /\bimport\s+([A-Za-z_$][\w$]*)\s+from\s+["']([^"']+\.vue)["']/g;
+      let match: RegExpExecArray | null;
+      while ((match = re.exec(script.text)) !== null) {
+        out.push({ name: match[1], source: match[2], line: script.line + lineOf(script.text, match.index) });
+      }
+    }
   }
   return out;
 }
 
 /** Tag PascalCase (`<UserCard`) atau kebab (`<user-card`) di <template>. */
 export function parseTemplateTags(content: string): string[] {
-  const tm = /<template[^>]*>([\s\S]*?)<\/template>/.exec(content);
-  if (!tm) return [];
-  const body = tm[1];
-  const tags = new Set<string>();
-  const re = /<\s*([A-Z][\w]*|[a-z][\w]*(?:-[\w]+)+)/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(body)) !== null) tags.add(m[1]);
-  return [...tags];
+  return withSyntaxTree("vue", content, (root) => {
+    const tags = new Set<string>();
+    const visit = (node: Node) => {
+      if (node.type === "start_tag" || node.type === "self_closing_tag") {
+        const tag = node.namedChildren.find((child) => child?.type === "tag_name")?.text;
+        if (tag && (/^[A-Z]/.test(tag) || /^[a-z][\w]*-[\w-]+$/.test(tag))) tags.add(tag);
+      }
+      for (const child of node.namedChildren) if (child) visit(child);
+    };
+    for (const template of root.namedChildren.filter((child): child is Node => child?.type === "template_element")) visit(template);
+    return [...tags];
+  });
 }
 
 function kebabToPascal(s: string): string {
@@ -69,8 +102,32 @@ export function vueComponentName(rel: string): string {
   return base.replace(/\.vue$/, "");
 }
 
+function defineComponentLine(content: string): number | null {
+  for (const script of scripts(content)) {
+    try {
+      const line = withSyntaxTree("javascript", script.text, (root) => {
+        let found: number | null = null;
+        const visit = (node: Node) => {
+          if (node.type === "call_expression" && node.childForFieldName("function")?.text === "defineComponent") {
+            found ??= script.line + node.startPosition.row + 1;
+          }
+          for (const child of node.namedChildren) if (child) visit(child);
+        };
+        visit(root);
+        return found;
+      });
+      if (line !== null) return line;
+    } catch (error) {
+      if (!(error instanceof Error) || !error.message.startsWith("Grammar javascript belum siap")) throw error;
+      const match = /\bdefineComponent\s*\(/.exec(script.text);
+      if (match) return script.line + lineOf(script.text, match.index);
+    }
+  }
+  return null;
+}
+
 export function hasVueDefineComponent(content: string): boolean {
-  return /\bdefineComponent\s*\(/.test(content);
+  return defineComponentLine(content) !== null;
 }
 
 function resolveImportRel(fromRel: string, source: string): string | null {
@@ -109,9 +166,7 @@ export const vueAdapter: FrameworkAdapter = {
       const fileSym = fileSymbolOf(ctx.db, f.fileId);
       if (!fileSym) continue;
       const name = vueComponentName(f.rel);
-      const line = hasVueDefineComponent(f.content)
-        ? lineOf(f.content, f.content.search(/\bdefineComponent\s*\(/))
-        : 1;
+      const line = defineComponentLine(f.content) ?? 1;
       const id = ensureAdapterSymbol(ctx.db, f.fileId, {
         name,
         type: "component",

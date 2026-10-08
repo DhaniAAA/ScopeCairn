@@ -35,7 +35,21 @@ export function cmdRead(repoRoot: string, kind: string, name: string): void {
       return;
     }
     // Excerpt window: mulai dari baris definisi (1-based), def line s/d +40.
-    const start = row.start_line;
+    // Sertakan blok komentar/docstring yang langsung menempel di atas
+    // (AST-aware chunking: potongan selaras dengan simbol Tree-sitter).
+    let start = row.start_line;
+    while (start > 1 && start > row.start_line - 40) {
+      const above = lines[start - 2]?.trim() ?? "";
+      if (
+        above.startsWith("//") || above.startsWith("/*") || above.startsWith("*") ||
+        above.startsWith("#") || above.startsWith('"""') || above.startsWith("'''") ||
+        above.startsWith("<!--")
+      ) {
+        start--;
+      } else {
+        break;
+      }
+    }
     const end = Math.min(lines.length, Math.max(row.end_line, row.start_line + 40));
     console.log(`# ${node.name} (${node.type}) — ${node.file}:${start}-${end}`);
     console.log(lines.slice(start - 1, end).join("\n"));

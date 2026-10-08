@@ -1,5 +1,5 @@
-// PRD FR-02 / FR-03 types. Fase 2: deterministic regex extractor.
-// Tree-sitter WASM grammars plug in here later without changing the shape.
+// PRD FR-02 / FR-03 types. Contract consumed by the Tree-sitter extractor
+// (src/extract/treeSitter.ts) without changing consumers downstream.
 
 export type SymbolType =
   | "file"
@@ -35,6 +35,8 @@ export interface ExtractedSymbol {
   signature: string;
   startLine: number;
   endLine: number;
+  /** Docstring/komentar utama tepat di atas deklarasi, bila ada. */
+  doc?: string;
 }
 
 export interface RawRelation {
@@ -51,6 +53,20 @@ export interface RawRelation {
 export interface FileExtraction {
   symbols: ExtractedSymbol[];
   relations: RawRelation[];
+}
+
+export type EdgeEvidence = "EXTRACTED" | "INFERRED" | "AMBIGUOUS";
+
+/** Kesan kejujuran tepi: hasil parse langsung vs inferensi vs ambigu. */
+export function evidenceOf(
+  rel: RelationType,
+  confidence: number,
+  methodCall?: boolean
+): EdgeEvidence {
+  if (methodCall) return "AMBIGUOUS";
+  if (rel === "QUERIES" || rel === "ROUTES_TO" || rel === "TESTS") return "INFERRED";
+  if (rel === "USES" || rel === "REFERENCES") return "AMBIGUOUS";
+  return confidence >= 1 ? "EXTRACTED" : "INFERRED";
 }
 
 // PRD FR-03: every relation carries weight + confidence.

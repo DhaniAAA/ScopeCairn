@@ -6,7 +6,9 @@ import type {
   AdapterResult,
   FrameworkAdapter,
 } from "./types.js";
-import { ensureAdapterSymbol, fileSymbolOf, insertRelation, lineOf } from "./types.js";
+import { ensureAdapterSymbol, fileSymbolOf, insertRelation } from "./types.js";
+import { withSyntaxTree } from "../treesitter.js";
+import type { Node } from "web-tree-sitter";
 
 // Adapter FastAPI: decorator `@app.get("/path")` / `@router.post(...)`
 // menjadi simbol `route`, dengan edge file→handler function (`def` di
@@ -22,23 +24,29 @@ export interface FastApiRoute {
 }
 
 export function parseFastApiRoutes(content: string): FastApiRoute[] {
-  const out: FastApiRoute[] = [];
-  const re = new RegExp(
-    `^\\s*@\\w+\\s*\\.\\s*(${METHODS.join("|")})\\s*\\(\\s*["']([^"']+)["']`,
-    "gm"
-  );
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(content)) !== null) {
-    const window = content.slice(m.index, m.index + 400);
-    const hm = /(?:async\s+)?def\s+(\w+)/.exec(window);
-    out.push({
-      method: m[1].toUpperCase(),
-      path: m[2],
-      handler: hm ? hm[1] : null,
-      line: lineOf(content, m.index),
-    });
-  }
-  return out;
+  return withSyntaxTree("python", content, (root) => {
+    const out: FastApiRoute[] = [];
+    const visit = (node: Node) => {
+      if (node.type === "decorated_definition") {
+        const definition = node.childForFieldName("definition");
+        const handler = definition?.type === "function_definition" ? definition.childForFieldName("name")?.text ?? null : null;
+        if (handler) for (const decorator of node.namedChildren.filter((child): child is Node => child?.type === "decorator")) {
+          const call = decorator.namedChildren.find((child) => child?.type === "call");
+          const callee = call?.childForFieldName("function");
+          const receiver = callee?.childForFieldName("object");
+          const method = callee?.childForFieldName("attribute")?.text;
+          const first = call?.childForFieldName("arguments")?.namedChildren[0];
+          if (callee?.type === "attribute" && receiver?.type === "identifier" && method && METHODS.includes(method) &&
+              first?.type === "string" && first.text.length > 2 && !first.namedChildren.some((child) => child?.type === "interpolation")) {
+            out.push({ method: method.toUpperCase(), path: first.text.slice(1, -1), handler, line: decorator.startPosition.row + 1 });
+          }
+        }
+      }
+      for (const child of node.namedChildren) if (child) visit(child);
+    };
+    visit(root);
+    return out;
+  });
 }
 
 function hasFastApiMarker(content: string): boolean {

@@ -8,23 +8,53 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   release:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: npm
+
+      - name: Verify tag matches package.json
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          PKG=$(node -p "require('./package.json').version")
+          if [ "$TAG" != "$PKG" ]; then
+            echo "Tag $TAG != package.json $PKG"; exit 1
+          fi
+
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
-      - name: Generate changelog
-        run: node scripts/changelog.js ${{ github.ref_name }}
+
+      - name: Generate release notes for this tag
+        run: |
+          node scripts/changelog.js "${GITHUB_REF_NAME#v}"
+          node -e "
+            const fs = require('fs');
+            const tag = process.env.GITHUB_REF_NAME.replace(/^v/, '');
+            const md = fs.readFileSync('CHANGELOG.md', 'utf8');
+            const re = new RegExp('## ' + tag.replace(/[.*+?^\${}()|[\]\\\\]/g, '\\\\$&') + '[\\\\s\\\\S]*?(?=\\n## |$)');
+            const m = md.match(re);
+            fs.writeFileSync('release_notes.md', m ? m[0].trim() + '\n' : '## ' + tag + '\n\n');
+          "
+
+      - name: Pack artifact
+        run: npm pack
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          body_path: CHANGELOG.md
+          body_path: release_notes.md
           files: |
             dist/**
+            scopecairn-*.tgz

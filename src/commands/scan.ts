@@ -1,9 +1,9 @@
 import { scanRepository } from "../scanner.js";
 
-export function cmdScan(repoRoot: string): void {
+export async function cmdScan(repoRoot: string): Promise<void> {
   console.log("ScopeCairn");
   console.log("✓ Repository detected");
-  const stats = scanRepository(repoRoot);
+  const stats = await scanRepository(repoRoot);
   console.log(`✓ ${stats.totalFilesSeen} files found (non-ignored)`);
   console.log(`✓ ${stats.sourceFiles} source files`);
   if (stats.metaFiles > 0) {

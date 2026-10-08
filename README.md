@@ -13,7 +13,9 @@ No MCP server, no embeddings, no network calls, no telemetry.
 - **Knowledge graph** — files, symbols (functions, classes, methods,
   interfaces, components, routes, models…), and typed relations
   (`IMPORTS`, `CALLS`, `EXTENDS`, `TESTS`, `ROUTES_TO`, `QUERIES`…)
-  in local SQLite, fully deterministic.
+  in local SQLite, fully deterministic. Parsing uses Tree-sitter
+  grammars (bundled WASM); schema files without a grammar keep an
+  explicit fallback.
 - **Graph retrieval, no embeddings** — token-matched seeds → weighted
   expansion → 5-signal ranking (seed, proximity, centrality, git
   recency, co-change). Weights configurable, calibrated by benchmark.
@@ -36,7 +38,8 @@ No MCP server, no embeddings, no network calls, no telemetry.
 - **Framework adapters** — Next.js (App + Pages Router routes),
   Prisma models, and Drizzle tables/queries detected automatically.
 - **Multi-language** — TypeScript, JavaScript, Python, Java, Go, Rust,
-  PHP, C#, C/C++, Ruby, HTML (plus config/schema files as graph nodes).
+  PHP, C#, C/C++, Ruby, HTML, Vue SFC (plus config/schema files as
+  graph nodes).
 - **Multi-agent setup** — skills for Claude Code (plugin + marketplace
   ready), Antigravity, Cursor, Windsurf, Copilot, Kiro, and an OpenCode
   slash command. ScopeCairn never touches your `AGENTS.md`/`CLAUDE.md` —
@@ -46,7 +49,9 @@ No MCP server, no embeddings, no network calls, no telemetry.
   PageRank hotspots, circular dependencies, routes, models, protected).
   Written on setup, rewritten only when the
   graph changes — for cold-start orientation; per-task precision still
-  comes from `context`.
+  comes from `context`. `.scopecairn/ARCHAEOLOGY.md` (purely from local
+  `git log`: top author, bus factor, churn) is written once; delete it to
+  regenerate.
 - **`GRAPH.html` visual explorer** — offline, dependency-free Canvas
   explorer written next to `GRAPH.md` on every graph change.
   Cluster ↔ File ↔ Symbol hierarchy toggle, live search, type filter,
@@ -144,8 +149,8 @@ scopecairn agents list
 | `init [path]` | Initial indexing + Skill, Workflow, detected agent skills (`--agents …\|all`; never writes `AGENTS.md`) |
 | `scan` / `rebuild` / `clean` | Manual index management (`scan` incremental; `rebuild` from scratch; `clean` removes `.scopecairn/`) |
 | `status` / `doctor` | Index status (incl. adapters, invocations) and health checks |
-| `context "<task>"` | Main entry point: context + scope (`--escalate`, `--no-refresh`, `--mode NORMAL|FAST|SAFE|AUDIT`); a path task returns an orientation map |
-| `impact <path\|symbol>` | Change impact: direct, indirect, tests, UI, queries, routes |
+| `context "<task>"` | Main entry point: context + scope (`--escalate`, `--no-refresh`, `--mode NORMAL|FAST|SAFE|AUDIT`, `--max-tokens N`); a path task returns an orientation map |
+| `impact <path\|symbol>` | Change impact: direct, indirect, tests (via TESTS edges + static CALLS backward reachability), UI, queries, routes. Edge evidence tagged EXTRACTED/INFERRED/AMBIGUOUS |
 | `graph <symbol>` | Symbol relations (+ PageRank, community, cycle status) |
 | `path <from> <to>` | Shortest multi-hop call/dependency path between two symbols |
 | `export --format <fmt>` | Graph export: `mermaid`, `graphml`, `dot`, or `json` (default `.scopecairn/graph.<ext>`, override with `--out`) |

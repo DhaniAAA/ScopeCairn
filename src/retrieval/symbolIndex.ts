@@ -13,14 +13,14 @@ export function syncFileIndex(
   // File symbol itself may not exist yet in odd states — guard.
   const rows = db
     .prepare(
-      `SELECT id, name, type, signature FROM symbols WHERE file_id = ?`
+      `SELECT id, name, type, signature, doc FROM symbols WHERE file_id = ?`
     )
-    .all(fileId) as { id: number; name: string; type: string; signature: string }[];
+    .all(fileId) as { id: number; name: string; type: string; signature: string; doc: string }[];
   const ins = db.prepare(
     `INSERT INTO symbol_index(symbol_id, tokens) VALUES (?, ?)`
   );
   for (const r of rows) {
-    const toks = tokenizeIdentifier(`${r.name} ${r.signature} ${relPath}`).join(" ");
+    const toks = tokenizeIdentifier(`${r.name} ${r.signature} ${relPath} ${r.doc ?? ""}`).join(" ");
     if (toks) ins.run(r.id, toks);
   }
 }

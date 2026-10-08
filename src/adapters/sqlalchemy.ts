@@ -15,6 +15,8 @@ import {
   lineOf,
 } from "./types.js";
 import { WEIGHT } from "../extract/types.js";
+import { withSyntaxTree } from "../treesitter.js";
+import type { Node } from "web-tree-sitter";
 
 // Adapter SQLAlchemy: `class X(Base):` (dengan `__tablename__`) menjadi
 // simbol `model`; `session.query(X)` / `select(X)` menjadi edge QUERIES.
@@ -27,24 +29,32 @@ export interface SqlAlchemyModel {
 }
 
 export function parseSqlAlchemyModels(content: string): SqlAlchemyModel[] {
-  const out: SqlAlchemyModel[] = [];
-  const re = /^class\s+(\w+)\s*\(([^)]*)\)\s*:/gm;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(content)) !== null) {
-    const rest = content.slice(m.index, m.index + 1500);
-    const nextClass = rest.slice(1).search(/^class\s+\w+/m);
-    const body = nextClass > 0 ? rest.slice(0, nextClass + 1) : rest;
-    const tm = /__tablename__\s*=\s*["']([^"']+)["']/.exec(body);
-    const isBase = /\b(Base|DeclarativeBase|declarative_base|Model)\b/.test(m[2]);
-    if (tm || isBase) {
-      out.push({
-        name: m[1],
-        table: tm ? tm[1] : null,
-        line: lineOf(content, m.index),
-      });
-    }
-  }
-  return out;
+  return withSyntaxTree("python", content, (root) => {
+    const out: SqlAlchemyModel[] = [];
+    const visit = (node: Node) => {
+      if (node.type === "class_definition") {
+        const body = node.childForFieldName("body");
+        const bases = node.childForFieldName("superclasses")?.namedChildren ?? [];
+        const isBase = bases.some((base) => !!base && (["Base", "DeclarativeBase", "declarative_base", "Model"].includes(base.text) ||
+          base.type === "attribute" && ["Base", "DeclarativeBase", "Model"].includes(base.childForFieldName("attribute")?.text ?? "") ||
+          base.type === "call" && base.childForFieldName("function")?.text === "declarative_base"));
+        let table: string | null = null;
+        for (const statement of body?.namedChildren ?? []) {
+          const assignment = statement?.type === "expression_statement" ? statement.namedChildren[0] : statement;
+          const value = assignment?.childForFieldName("right");
+          if (assignment?.type === "assignment" && assignment.childForFieldName("left")?.text === "__tablename__" &&
+              value?.type === "string" && !value.namedChildren.some((child) => child?.type === "interpolation")) {
+            table = value.text.slice(1, -1);
+          }
+        }
+        const name = node.childForFieldName("name")?.text;
+        if (name && (table !== null || isBase)) out.push({ name, table, line: node.startPosition.row + 1 });
+      }
+      for (const child of node.namedChildren) if (child) visit(child);
+    };
+    visit(root);
+    return out;
+  });
 }
 
 export interface SqlAlchemyQuery {
@@ -53,13 +63,24 @@ export interface SqlAlchemyQuery {
 }
 
 export function parseSqlAlchemyQueries(content: string): SqlAlchemyQuery[] {
-  const out: SqlAlchemyQuery[] = [];
-  const re = /(?:session\s*\.\s*query|select)\s*\(\s*(\w+)/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(content)) !== null) {
-    out.push({ model: m[1], index: m.index });
-  }
-  return out;
+  return withSyntaxTree("python", content, (root) => {
+    const out: SqlAlchemyQuery[] = [];
+    const visit = (node: Node) => {
+      if (node.type === "call") {
+        const callee = node.childForFieldName("function");
+        const isSelect = callee?.type === "identifier" && callee.text === "select";
+        const isQuery = callee?.type === "attribute" && callee.childForFieldName("object")?.text === "session" &&
+          callee.childForFieldName("attribute")?.text === "query";
+        const first = node.childForFieldName("arguments")?.namedChildren[0];
+        if ((isSelect || isQuery) && first?.type === "identifier") {
+          out.push({ model: first.text, index: node.startIndex });
+        }
+      }
+      for (const child of node.namedChildren) if (child) visit(child);
+    };
+    visit(root);
+    return out;
+  });
 }
 
 function hasSqlAlchemyMarker(content: string): boolean {
@@ -104,7 +125,7 @@ export function deriveSqlAlchemyQueries(
   return out;
 }
 
-/** Hapus + turunkan ulang edge QUERIES untuk file-file ini (murah: regex). */
+/** Hapus + turunkan ulang edge QUERIES untuk file-file ini. */
 export function refreshSqlAlchemyQueries(
   db: AdapterContext["db"],
   files: { fileId: number; rel: string; content: string }[]

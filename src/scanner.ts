@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { detectLanguage, isSourceFile } from "./languages.js";
+import { grammarForPath } from "./extract/treeSitter.js";
+import { prepareTreeSitter } from "./treesitter.js";
 import { hashContent, openDb, dataDir } from "./db.js";
 import { loadIgnoreRules, isIgnored } from "./ignore.js";
 import { indexFileSymbols, indexFileRelations, indexMetaFile, linkTests } from "./indexer.js";
@@ -10,6 +12,7 @@ import { isIndexableMetaFile, loadProtectedPatterns } from "./scope/protected.js
 import { runAdapters } from "./adapters/index.js";
 import { writeGraphMdIfChanged } from "./graph/export.js";
 import { buildVisualModel, renderHtml, GRAPH_HTML_NAME } from "./graph/visual.js";
+import { writeArchaeologyIfAbsent } from "./archaeology.js";
 
 export interface ScanStats {
   repoRoot: string;
@@ -46,7 +49,7 @@ function walk(absDir: string, out: string[]): void {
   }
 }
 
-export function scanRepository(repoRoot: string): ScanStats {
+export async function scanRepository(repoRoot: string): Promise<ScanStats> {
   const started = Date.now();
   const rules = loadIgnoreRules(repoRoot);
   const db = openDb(repoRoot);
@@ -54,6 +57,10 @@ export function scanRepository(repoRoot: string): ScanStats {
   try {
     const allAbs: string[] = [];
     walk(repoRoot, allAbs);
+    await prepareTreeSitter(allAbs
+      .filter((abs) => isSourceFile(abs) && !isIgnored(toPosixRel(repoRoot, abs), rules))
+      .map((abs) => grammarForPath(abs))
+      .filter((name): name is string => name !== null));
 
     let totalFilesSeen = 0;
     let inserted = 0;
@@ -89,6 +96,10 @@ export function scanRepository(repoRoot: string): ScanStats {
       ftsCount = 0;
     }
     const backfill = !backfillDone && (symbolCount === 0 || ftsCount === 0);
+    const extractorVersion = "tree-sitter-wasms-0.1.13-v1";
+    const indexedVersion = db.prepare(`SELECT value FROM meta WHERE key = 'extractor_version'`)
+      .get() as { value: string } | undefined;
+    const parserChanged = indexedVersion?.value !== extractorVersion;
 
     // Two-phase indexing: phase 1 inserts symbols for all changed files,
     // phase 2 resolves relations — cross-file edges are order-independent.
@@ -126,7 +137,7 @@ export function scanRepository(repoRoot: string): ScanStats {
           metaChanged.push({ fileId: Number(r.lastInsertRowid), rel });
         }
         inserted++;
-      } else if (row.hash !== hash || backfill) {
+      } else if (row.hash !== hash || backfill || parserChanged) {
         updateStmt.run(hash, buf.length, language, rel);
         if (source) {
           pending.push({ fileId: row.id, rel, content: buf.toString("utf8") });
@@ -179,6 +190,10 @@ export function scanRepository(repoRoot: string): ScanStats {
       `INSERT INTO meta(key, value) VALUES ('backfill_done', '1')
        ON CONFLICT(key) DO UPDATE SET value = excluded.value`
     ).run();
+    db.prepare(
+      `INSERT INTO meta(key, value) VALUES ('extractor_version', ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+    ).run(extractorVersion);
 
     linkTests(db);
     cleanupIndex(db);
@@ -190,6 +205,7 @@ export function scanRepository(repoRoot: string): ScanStats {
       adapterRun.symbols > 0 ||
       adapterRun.relations > 0;
     const graphWritten = writeGraphMdIfChanged(db, repoRoot, graphDirty);
+    if (graphDirty) writeArchaeologyIfAbsent(repoRoot);
     let visualWritten = false;
     if (graphDirty) {
       try {

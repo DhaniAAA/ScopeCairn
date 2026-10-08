@@ -14,6 +14,9 @@ import {
   lineOf,
 } from "./types.js";
 import { WEIGHT } from "../extract/types.js";
+import { withSyntaxTree } from "../treesitter.js";
+import { grammarForPath } from "../extract/treeSitter.js";
+import type { Node } from "web-tree-sitter";
 
 // Adapter Next.js (FR-13): endpoint detection + referensi database.
 // Mencakup App Router (`app/`), Pages Router (`pages/`), dan panggilan
@@ -95,7 +98,17 @@ export function pagesRouteFromRel(rel: string): { kind: "page" | "route"; url: s
 
 /** True bila konten memuat direktif Server Actions (`"use server"` / `'use server'`). */
 export function detectServerActions(content: string): boolean {
-  return content.includes('"use server"') || content.includes("'use server'");
+  return withSyntaxTree("typescript", content, (root) => {
+    const visit = (node: Node): boolean => {
+      if (node.type === "statement_block" || node.type === "program") {
+        const directive = node.namedChildren.find((child) => child && child.type !== "comment");
+        if (directive?.type === "expression_statement" && directive.namedChildren[0]?.type === "string" &&
+            directive.namedChildren[0]?.text.slice(1, -1) === "use server") return true;
+      }
+      return node.namedChildren.some((child) => !!child && visit(child));
+    };
+    return visit(root);
+  });
 }
 
 /** True bila path file adalah middleware Next.js (`middleware.ts`/`middleware.js`). */
@@ -104,28 +117,47 @@ export function detectMiddleware(rel: string): boolean {
 }
 
 /** Handler yang diekspor route.ts: `export async function GET(`. */
+function exportedHandlers(content: string, grammar: string): { method: string; line: number }[] {
+  return withSyntaxTree(grammar, content, (root) => {
+    const out: { method: string; line: number }[] = [];
+    for (const node of root.namedChildren) {
+      if (node?.type !== "export_statement") continue;
+      const declaration = node.childForFieldName("declaration") ?? node.namedChildren.find((child) => child?.type === "function_declaration");
+      const method = declaration?.type === "function_declaration" ? declaration.childForFieldName("name")?.text : null;
+      if (method && API_METHODS.includes(method)) out.push({ method, line: node.startPosition.row + 1 });
+    }
+    return out;
+  });
+}
+
 export function routeHandlers(content: string): { method: string; line: number }[] {
-  const out: { method: string; line: number }[] = [];
-  const re = /export\s+(?:async\s+)?function\s+(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s*\(/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(content)) !== null) {
-    out.push({ method: m[1], line: lineOf(content, m.index) });
-  }
-  return out;
+  return exportedHandlers(content, "typescript");
 }
 
 /** Panggilan Prisma: `prisma.request.findMany(` → { model: `request`, op }. */
-export function prismaCalls(
-  content: string
-): { model: string; op: string; index: number }[] {
-  const out: { model: string; op: string; index: number }[] = [];
-  const ops = PRISMA_OPS.join("|");
-  const re = new RegExp(`prisma\\.(\\w+)\\.(${ops})\\s*\\(`, "g");
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(content)) !== null) {
-    out.push({ model: m[1], op: m[2], index: m.index });
-  }
-  return out;
+function callsToPrisma(content: string, grammar: string): { model: string; op: string; index: number }[] {
+  return withSyntaxTree(grammar, content, (root) => {
+    const out: { model: string; op: string; index: number }[] = [];
+    const visit = (node: Node) => {
+      if (node.type === "call_expression") {
+        const callee = node.childForFieldName("function");
+        const modelMember = callee?.childForFieldName("object");
+        const op = callee?.childForFieldName("property")?.text;
+        const model = modelMember?.childForFieldName("property")?.text;
+        if (callee?.type === "member_expression" && modelMember?.type === "member_expression" &&
+            modelMember.childForFieldName("object")?.text === "prisma" && model && op && PRISMA_OPS.includes(op)) {
+          out.push({ model, op, index: node.startIndex });
+        }
+      }
+      for (const child of node.namedChildren) if (child) visit(child);
+    };
+    visit(root);
+    return out;
+  });
+}
+
+export function prismaCalls(content: string): { model: string; op: string; index: number }[] {
+  return callsToPrisma(content, "typescript");
 }
 
 function resolveModel(db: AdapterContext["db"], name: string): number | null {
@@ -133,15 +165,16 @@ function resolveModel(db: AdapterContext["db"], name: string): number | null {
 }
 
 /** Turunkan edge QUERIES Prisma untuk satu file (tanpa menulis DB). */
-export function derivePrismaQueries(
+function prismaQueryEdges(
   db: AdapterContext["db"],
   fileId: number,
-  content: string
+  content: string,
+  grammar: string
 ): QueryEdge[] {
   const out: QueryEdge[] = [];
   const fileSym = fileSymbolOf(db, fileId);
   if (!fileSym) return out;
-  for (const call of prismaCalls(content)) {
+  for (const call of callsToPrisma(content, grammar)) {
     const modelId = resolveModel(db, call.model);
     if (!modelId) continue;
     const line = lineOf(content, call.index);
@@ -157,7 +190,15 @@ export function derivePrismaQueries(
   return out;
 }
 
-/** Hapus + turunkan ulang edge QUERIES untuk file-file ini (murah: regex). */
+export function derivePrismaQueries(
+  db: AdapterContext["db"],
+  fileId: number,
+  content: string
+): QueryEdge[] {
+  return prismaQueryEdges(db, fileId, content, "typescript");
+}
+
+/** Hapus + turunkan ulang edge QUERIES untuk file-file ini. */
 export function refreshQueries(
   db: AdapterContext["db"],
   files: { fileId: number; rel: string; content: string }[]
@@ -172,7 +213,9 @@ export function refreshQueries(
   );
   for (const f of files) {
     del.run(f.fileId);
-    for (const e of derivePrismaQueries(db, f.fileId, f.content)) {
+    const grammar = grammarForPath(f.rel);
+    if (!grammar) continue;
+    for (const e of prismaQueryEdges(db, f.fileId, f.content, grammar)) {
       ins.run(e.callerId, e.targetId, e.weight, e.confidence);
       n++;
     }
@@ -216,7 +259,7 @@ export const nextjsAdapter: FrameworkAdapter = {
           insertRelation(ctx.db, fileSym, id, "CONTAINS", 1.0, 1.0);
           relations++;
         } else {
-          const handlers = routeHandlers(f.content);
+          const handlers = exportedHandlers(f.content, grammarForPath(f.rel) ?? "typescript");
           if (handlers.length === 0) {
             // route.ts tanpa handler terekspor — catat rute tanpa edge handler.
             const id = ensureAdapterSymbol(ctx.db, f.fileId, {

@@ -15,6 +15,9 @@ import {
   lineOf,
 } from "./types.js";
 import { WEIGHT } from "../extract/types.js";
+import { withSyntaxTree } from "../treesitter.js";
+import { grammarForPath } from "../extract/treeSitter.js";
+import type { Node } from "web-tree-sitter";
 
 // Adapter Drizzle ORM: definisi tabel (`pgTable`/`sqliteTable`/`mysqlTable`)
 // menjadi simbol `model`, dan dua gaya query menjadi edge QUERIES:
@@ -42,22 +45,30 @@ export interface DrizzleTable {
 }
 
 /** `export const users = pgTable("users", {` → { name: `users`, table: `users` }. */
+function drizzleTables(content: string, grammar: string): DrizzleTable[] {
+  return withSyntaxTree(grammar, content, (root) => {
+    const out: DrizzleTable[] = [];
+    const visit = (node: Node) => {
+      if (node.type === "variable_declarator") {
+        const name = node.childForFieldName("name");
+        const call = node.childForFieldName("value");
+        const first = call?.childForFieldName("arguments")?.namedChildren[0];
+        if (name?.type === "identifier" && call?.type === "call_expression" &&
+            TABLE_FNS.includes(call.childForFieldName("function")?.text ?? "") &&
+            first && (first.type === "string" || first.type === "template_string") && first.text.length > 2 &&
+            !first.namedChildren.some((child) => child?.type === "template_substitution")) {
+          out.push({ name: name.text, table: first.text.slice(1, -1), line: node.startPosition.row + 1 });
+        }
+      }
+      for (const child of node.namedChildren) if (child) visit(child);
+    };
+    visit(root);
+    return out;
+  });
+}
+
 export function parseDrizzleTables(content: string): DrizzleTable[] {
-  const out: DrizzleTable[] = [];
-  const fns = TABLE_FNS.join("|");
-  const re = new RegExp(
-    `(?:export\\s+)?(?:const|let|var)\\s+(\\w+)\\s*=\\s*(?:${fns})\\s*\\(\\s*["'\`]([^"'\\\`]+)["'\`]`,
-    "g"
-  );
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(content)) !== null) {
-    out.push({
-      name: m[1],
-      table: m[2],
-      line: content.slice(0, m.index).split("\n").length,
-    });
-  }
-  return out;
+  return drizzleTables(content, "typescript");
 }
 
 export interface DrizzleQuery {
@@ -70,34 +81,53 @@ export interface DrizzleQuery {
  * `db.query.users.findMany(` dan `db.select().from(users)` /
  * `db.insert(users)` / `db.update(users)` / `db.delete(users)`.
  */
+function member(node: Node | null | undefined, property: string): Node | null {
+  return node?.type === "member_expression" && node.childForFieldName("property")?.text === property
+    ? node.childForFieldName("object") : null;
+}
+
+function drizzleQueries(content: string, grammar: string): DrizzleQuery[] {
+  return withSyntaxTree(grammar, content, (root) => {
+    const out: DrizzleQuery[] = [];
+    const visit = (node: Node) => {
+      if (node.type === "call_expression") {
+        const callee = node.childForFieldName("function");
+        const op = callee?.childForFieldName("property")?.text;
+        const first = node.childForFieldName("arguments")?.namedChildren[0];
+        if (op && RELATIONAL_OPS.includes(op)) {
+          const tableMember = callee?.childForFieldName("object");
+          const table = tableMember?.childForFieldName("property")?.text;
+          if (table && member(member(tableMember, table), "query")?.text === "db") {
+            out.push({ table, index: node.startIndex });
+          }
+        } else if (op === "from" && first?.type === "identifier") {
+          const select = callee?.childForFieldName("object");
+          const selectMember = select?.childForFieldName("function");
+          const selectOp = selectMember?.childForFieldName("property")?.text;
+          if (select?.type === "call_expression" && (selectOp === "select" || selectOp === "selectDistinct") &&
+              member(selectMember, selectOp)?.text === "db") {
+            out.push({ table: first.text, index: select.startIndex });
+          }
+        } else if (["insert", "update", "delete"].includes(op ?? "") && first?.type === "identifier" &&
+                   member(callee, op!)?.text === "db") {
+          out.push({ table: first.text, index: node.startIndex });
+        }
+      }
+      for (const child of node.namedChildren) if (child) visit(child);
+    };
+    visit(root);
+    return out.sort((a, b) => a.index - b.index);
+  });
+}
+
 export function parseDrizzleQueries(content: string): DrizzleQuery[] {
-  const out: DrizzleQuery[] = [];
-  const relOps = RELATIONAL_OPS.join("|");
-  const relRe = new RegExp(`db\\s*\\.\\s*query\\s*\\.\\s*(\\w+)\\s*\\.\\s*(?:${relOps})\\s*\\(`, "g");
-  let m: RegExpExecArray | null;
-  while ((m = relRe.exec(content)) !== null) {
-    out.push({ table: m[1], index: m.index });
-  }
-  // Builder: db.select()/insert()/update()/delete() → tabel dari `.from(x)` atau argumen.
-  const builderRe = /db\s*\.\s*(select|selectDistinct|insert|update|delete)\b/g;
-  while ((m = builderRe.exec(content)) !== null) {
-    const op = m[1];
-    const window = content.slice(m.index, m.index + 400);
-    let tm: RegExpExecArray | null;
-    if (op === "select" || op === "selectDistinct") {
-      tm = /\.from\s*\(\s*(\w+)/.exec(window);
-    } else {
-      tm = /\(\s*(\w+)\s*[,)]/.exec(window);
-    }
-    if (tm) out.push({ table: tm[1], index: m.index });
-  }
-  return out;
+  return drizzleQueries(content, "typescript");
 }
 
 function hasDrizzleMarker(content: string): boolean {
   if (
     content.includes("drizzle-orm") ||
-    TABLE_FNS.some((f) => content.includes(`${f}(`)) ||
+    TABLE_FNS.some((f) => new RegExp(`\\b${f}\\s*\\(`).test(content)) ||
     /db\s*\.\s*query\s*\./.test(content)
   ) {
     return true;
@@ -108,15 +138,16 @@ function hasDrizzleMarker(content: string): boolean {
 }
 
 /** Turunkan edge QUERIES Drizzle untuk satu file (tanpa menulis DB). */
-export function deriveDrizzleQueries(
+function drizzleQueryEdges(
   db: AdapterContext["db"],
   fileId: number,
-  content: string
+  content: string,
+  grammar: string
 ): QueryEdge[] {
   const out: QueryEdge[] = [];
   const fileSym = fileSymbolOf(db, fileId);
   if (!fileSym) return out;
-  for (const q of parseDrizzleQueries(content)) {
+  for (const q of drizzleQueries(content, grammar)) {
     const target =
       findModelInFile(db, fileId, q.table) ?? findModelGlobal(db, q.table);
     if (!target) continue;
@@ -130,6 +161,14 @@ export function deriveDrizzleQueries(
     });
   }
   return out;
+}
+
+export function deriveDrizzleQueries(
+  db: AdapterContext["db"],
+  fileId: number,
+  content: string
+): QueryEdge[] {
+  return drizzleQueryEdges(db, fileId, content, "typescript");
 }
 
 /** Hapus + turunkan ulang edge QUERIES (anti-basi, pola nextjs). */
@@ -148,7 +187,7 @@ export function refreshDrizzleQueries(
   for (const f of files) {
     if (!hasDrizzleMarker(f.content)) continue;
     del.run(f.fileId);
-    for (const e of deriveDrizzleQueries(db, f.fileId, f.content)) {
+    for (const e of drizzleQueryEdges(db, f.fileId, f.content, grammarForPath(f.rel) ?? "typescript")) {
       ins.run(e.callerId, e.targetId, e.weight, e.confidence);
       n++;
     }
@@ -221,7 +260,7 @@ export const drizzleAdapter: FrameworkAdapter = {
       if (!hasDrizzleMarker(f.content)) continue;
       const fileSym = fileSymbolOf(ctx.db, f.fileId);
       if (!fileSym) continue;
-      for (const t of parseDrizzleTables(f.content)) {
+      for (const t of drizzleTables(f.content, grammarForPath(f.rel) ?? "typescript")) {
         const id = ensureAdapterSymbol(ctx.db, f.fileId, {
           name: t.name,
           type: "model",

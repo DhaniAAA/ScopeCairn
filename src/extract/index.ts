@@ -1,36 +1,10 @@
-import { extractTypeScript } from "./typescript.js";
-import { extractPython } from "./python.js";
-import { extractGeneric, extractHtml } from "./generic.js";
+import { extractSyntaxTree } from "./treeSitter.js";
 import type { FileExtraction } from "./types.js";
-import { detectLanguage } from "../languages.js";
 
 export * from "./types.js";
 
-// Dispatcher. Tree-sitter WASM grammars plug in here per language;
-// regex fallback stays for zero-dep local-first operation.
 export function extractFile(relPath: string, source: string): FileExtraction {
-  const lang = detectLanguage(relPath);
-  switch (lang) {
-    case "typescript":
-      return extractTypeScript(source, relPath.endsWith(".tsx"));
-    case "javascript":
-      return extractTypeScript(source, relPath.endsWith(".jsx"));
-    case "python":
-      return extractPython(source);
-    case "html":
-      return extractHtml(source);
-    case "java":
-    case "go":
-    case "rust":
-    case "php":
-    case "csharp":
-    case "cpp":
-    case "c":
-    case "ruby":
-      return extractGeneric(source, lang);
-    default:
-      return { symbols: [], relations: [] };
-  }
+  return extractSyntaxTree(relPath, source);
 }
 
 // TESTS relation (PRD FR-03): test file -> source file it tests.

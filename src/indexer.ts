@@ -2,6 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import path from "node:path";
 import { extractFile, testTarget } from "./extract/index.js";
 import { syncFileIndex } from "./retrieval/symbolIndex.js";
+import { evidenceOf, type RelationType } from "./extract/types.js";
 
 export interface IndexResult {
   symbols: number;
@@ -138,12 +139,12 @@ export function indexFileSymbols(
   const ext = extractFile(relPath, content);
 
   const insSym = db.prepare(
-    `INSERT INTO symbols(file_id, name, type, signature, start_line, end_line)
-     VALUES (?, ?, ?, ?, ?, ?)`
+    `INSERT INTO symbols(file_id, name, type, signature, start_line, end_line, doc)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
   );
   for (const s of ext.symbols) {
     if (s.type === "import" || s.type === "export") continue;
-    insSym.run(fileId, s.name, s.type, s.signature, s.startLine, s.endLine);
+    insSym.run(fileId, s.name, s.type, s.signature, s.startLine, s.endLine, s.doc ?? "");
   }
   syncFileIndex(db, fileId, relPath);
   return { extraction: ext, fileSym };
@@ -163,12 +164,12 @@ export function indexFileRelations(
   for (const r of rows) if (!ids.has(r.name)) ids.set(r.name, r.id);
 
   const insRel = db.prepare(
-    `INSERT INTO relationships(source_id, target_id, relationship_type, weight, confidence)
-     VALUES (?, ?, ?, ?, ?)`
+    `INSERT INTO relationships(source_id, target_id, relationship_type, weight, confidence, evidence)
+     VALUES (?, ?, ?, ?, ?, ?)`
   );
   const contains = db.prepare(
-    `INSERT INTO relationships(source_id, target_id, relationship_type, weight, confidence)
-     VALUES (?, ?, 'CONTAINS', 1.0, 1.0)`
+    `INSERT INTO relationships(source_id, target_id, relationship_type, weight, confidence, evidence)
+     VALUES (?, ?, 'CONTAINS', 1.0, 1.0, 'EXTRACTED')`
   );
   let rels = 0;
   for (const id of ids.values()) {
@@ -190,7 +191,7 @@ export function indexFileRelations(
     if (r.rel === "IMPORTS") {
       const target = resolveModuleToFile(db, relPath, r.to);
       if (target) {
-        insRel.run(fileSym, target, "IMPORTS", r.weight, r.confidence);
+        insRel.run(fileSym, target, "IMPORTS", r.weight, r.confidence, evidenceOf("IMPORTS", r.confidence));
         rels++;
       }
       continue;
@@ -199,14 +200,14 @@ export function indexFileRelations(
       if (r.to.startsWith("export*:")) {
         const target = resolveModuleToFile(db, relPath, r.to.slice(8));
         if (target) {
-          insRel.run(fileSym, target, "EXPORTS", r.weight, r.confidence);
+          insRel.run(fileSym, target, "EXPORTS", r.weight, r.confidence, evidenceOf("EXPORTS", r.confidence));
           rels++;
         }
         continue;
       }
       const target = resolveLocal(r.to);
       if (target && target !== fileSym) {
-        insRel.run(fileSym, target, "EXPORTS", r.weight, r.confidence);
+        insRel.run(fileSym, target, "EXPORTS", r.weight, r.confidence, evidenceOf("EXPORTS", r.confidence));
         rels++;
       }
       continue;
@@ -217,7 +218,7 @@ export function indexFileRelations(
         ? methodSymbolId(db, fileId, ids, r.to)
         : (ids.get(r.to) ?? globalSymbolId(db, r.to, srcDir));
     if (src && dst && src !== dst) {
-      insRel.run(src, dst, r.rel, r.weight, r.confidence);
+      insRel.run(src, dst, r.rel, r.weight, r.confidence, evidenceOf(r.rel as RelationType, r.confidence, r.methodCall));
       rels++;
     }
   }
@@ -264,8 +265,8 @@ export function linkTests(db: DatabaseSync): number {
   db.prepare(`DELETE FROM relationships WHERE relationship_type = 'TESTS'`).run();
   let n = 0;
   const ins = db.prepare(
-    `INSERT INTO relationships(source_id, target_id, relationship_type, weight, confidence)
-     VALUES (?, ?, 'TESTS', 0.9, 0.8)`
+    `INSERT INTO relationships(source_id, target_id, relationship_type, weight, confidence, evidence)
+     VALUES (?, ?, 'TESTS', 0.9, 0.8, 'INFERRED')`
   );
   for (const f of files) {
     const stemBase = testTarget(f.path);

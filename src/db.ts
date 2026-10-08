@@ -14,7 +14,7 @@ function loadDatabaseSync(): typeof DatabaseSyncType {
 
 export const DATA_DIR_NAME = ".scopecairn";
 export const DB_FILE_NAME = "scopecairn.db";
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 6;
 
 export function dataDir(repoRoot: string): string {
   return path.join(repoRoot, DATA_DIR_NAME);
@@ -123,6 +123,22 @@ export function openDb(repoRoot: string): DatabaseSyncType {
     `INSERT INTO meta(key, value) VALUES ('schema_version', ?)
      ON CONFLICT(key) DO UPDATE SET value = excluded.value`
   ).run(String(SCHEMA_VERSION));
+  // Migrasi ringan: tambah kolom tanpa membongkar skema (idempotent).
+  for (const [table, column, ddl] of [
+    ["relationships", "evidence", "evidence TEXT NOT NULL DEFAULT 'EXTRACTED'"],
+    ["symbols", "doc", "doc TEXT NOT NULL DEFAULT ''"],
+  ] as const) {
+    const cols = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+    if (!cols.some((c) => c.name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+  }
+  db.exec(
+    `UPDATE relationships SET evidence = 'INFERRED'
+     WHERE relationship_type IN ('QUERIES','ROUTES_TO','TESTS') AND evidence = 'EXTRACTED'`
+  );
+  db.exec(
+    `UPDATE relationships SET evidence = 'AMBIGUOUS'
+     WHERE relationship_type = 'CALLS' AND confidence < 1.0 AND evidence = 'EXTRACTED'`
+  );
   // Fase 2+3 tables are created via IF NOT EXISTS, so older DBs
   // migrate automatically on next open.
   return db;

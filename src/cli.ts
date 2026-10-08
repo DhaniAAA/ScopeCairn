@@ -126,7 +126,8 @@ program
   .option("--escalate", "force full COMPLEX context")
   .option("--no-refresh", "skip incremental refresh (debugging/benchmark)")
   .option("--mode <mode>", "agent mode: NORMAL|FAST|SAFE|AUDIT", "NORMAL")
-  .action((task: string, opts: { escalate?: boolean; noRefresh?: boolean; mode?: "NORMAL" | "FAST" | "SAFE" | "AUDIT" }) =>
+  .option("--max-tokens <n>", "potong konteks agar estimasi muat N token (≈ char/4)", parseInt)
+  .action((task: string, opts: { escalate?: boolean; noRefresh?: boolean; mode?: "NORMAL" | "FAST" | "SAFE" | "AUDIT"; maxTokens?: number }) =>
     cmdContext(repoRoot(), task, opts)
   );
 

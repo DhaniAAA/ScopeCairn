@@ -1,27 +1,53 @@
-// Fase 1: Tree-sitter bootstrap check (FR-02 prep).
-// Full symbol extraction lands in Fase 2. Here we only verify that
-// `web-tree-sitter` WASM runtime loads, so `doctor` can report it.
+import fs from "node:fs";
+import path from "node:path";
+import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
+import { Language, Parser, type Node } from "web-tree-sitter";
 
-let cached: boolean | null = null;
+const require = createRequire(import.meta.url);
+const languages = new Map<string, Language>();
+let initialization: Promise<void> | undefined;
+
+function grammarPath(name: string): string {
+  const file = `tree-sitter-${name}.wasm`;
+  const bundled = path.join(path.dirname(fileURLToPath(import.meta.url)), "grammars", file);
+  if (fs.existsSync(bundled)) return bundled;
+  return path.join(path.dirname(require.resolve("tree-sitter-wasms/package.json")), "out", file);
+}
+
+export async function prepareTreeSitter(names: Iterable<string>): Promise<void> {
+  initialization ??= Parser.init();
+  await initialization;
+  for (const name of new Set(names)) {
+    if (!languages.has(name)) {
+      languages.set(name, await Language.load(grammarPath(name)));
+    }
+  }
+}
+
+export function withSyntaxTree<T>(name: string, source: string, visit: (root: Node) => T): T {
+  const language = languages.get(name);
+  if (!language) throw new Error(`Grammar ${name} belum siap; panggil prepareTreeSitter terlebih dahulu`);
+  const parser = new Parser();
+  try {
+    parser.setLanguage(language);
+    const tree = parser.parse(source);
+    if (!tree) throw new Error(`Gagal parse grammar ${name}`);
+    try {
+      return visit(tree.rootNode);
+    } finally {
+      tree.delete();
+    }
+  } finally {
+    parser.delete();
+  }
+}
 
 export async function checkTreeSitter(): Promise<{ ok: boolean; detail: string }> {
-  if (cached !== null) {
-    return cached
-      ? { ok: true, detail: "cached OK" }
-      : { ok: false, detail: "cached FAIL" };
-  }
   try {
-    const mod = await import("web-tree-sitter");
-    const Parser = (mod as unknown as { Parser: { init: () => Promise<void> } }).Parser;
-    if (!Parser || typeof Parser.init !== "function") {
-      cached = false;
-      return { ok: false, detail: "Parser.init not found" };
-    }
-    await Parser.init();
-    cached = true;
-    return { ok: true, detail: "WASM parser runtime OK (grammars load in Fase 2)" };
-  } catch (e) {
-    cached = false;
-    return { ok: false, detail: e instanceof Error ? e.message : String(e) };
+    await prepareTreeSitter(["typescript"]);
+    return { ok: true, detail: "WASM runtime + TypeScript grammar OK" };
+  } catch (error) {
+    return { ok: false, detail: error instanceof Error ? error.message : String(error) };
   }
 }

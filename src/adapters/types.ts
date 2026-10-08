@@ -105,8 +105,8 @@ export function insertRelation(
 ): void {
   if (sourceId === targetId) return;
   db.prepare(
-    `INSERT INTO relationships(source_id, target_id, relationship_type, weight, confidence)
-     VALUES (?, ?, ?, ?, ?)`
+    `INSERT INTO relationships(source_id, target_id, relationship_type, weight, confidence, evidence)
+     VALUES (?, ?, ?, ?, ?, 'INFERRED')`
   ).run(sourceId, targetId, rel, weight, confidence);
 }
 

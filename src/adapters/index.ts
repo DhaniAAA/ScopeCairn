@@ -125,8 +125,8 @@ export function runAdapters(
         `DELETE FROM relationships WHERE relationship_type = 'QUERIES' AND source_id IN (SELECT id FROM symbols WHERE file_id = ?)`
       );
       const ins = db.prepare(
-        `INSERT INTO relationships(source_id, target_id, relationship_type, weight, confidence)
-         VALUES (?, ?, 'QUERIES', ?, ?)`
+        `INSERT INTO relationships(source_id, target_id, relationship_type, weight, confidence, evidence)
+         VALUES (?, ?, 'QUERIES', ?, ?, 'INFERRED')`
       );
       for (const r of all) {
         if (!derivers.some((d) => d.relevant(r.path))) continue;

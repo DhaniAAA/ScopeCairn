@@ -1,6 +1,6 @@
 {
   "name": "scopecairn",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "ScopeCairn — Codebase Intelligence & Agent Optimization Layer (local-first)",
   "license": "MIT",
   "type": "module",
@@ -44,6 +44,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.7.0",
+    "tree-sitter-wasms": "^0.1.13",
     "tsup": "^8.3.0",
     "tsx": "^4.19.0",
     "typescript": "^5.6.0"

@@ -8,12 +8,12 @@ import { isProtected, loadProtectedPatterns } from "../scope/protected.js";
 // Input: path file ("src/x.ts"), atau nama simbol ("RequestService").
 // Output: dampak langsung, tak langsung (2-hop), test, komponen UI.
 
-export function cmdImpact(
+export async function cmdImpact(
   repoRoot: string,
   target: string,
   opts: { noRefresh?: boolean } = {}
-): void {
-  if (!opts.noRefresh) refreshIndex(repoRoot);
+): Promise<void> {
+  if (!opts.noRefresh) await refreshIndex(repoRoot);
 
   const db = openDb(repoRoot);
   try {
@@ -48,7 +48,7 @@ export function cmdImpact(
     const directIds = new Set(direct.map((e) => e.other.id));
 
     // Indirect: tetangga dari tetangga (2-hop), kecuali center + direct.
-    const indirect = new Map<number, { name: string; type: string; file: string; via: string; rel: string }>();
+    const indirect = new Map<number, { name: string; type: string; file: string; via: string; rel: string; evidence: string }>();
     for (const e of direct.slice(0, 20)) {
       for (const e2 of neighbors(db, e.other.id, 20)) {
         if (e2.other.id === center.id || directIds.has(e2.other.id)) continue;
@@ -59,6 +59,7 @@ export function cmdImpact(
             file: e2.other.file,
             via: e.other.name,
             rel: e2.rel,
+            evidence: e2.evidence,
           });
         }
         if (indirect.size >= 15) break;
@@ -132,6 +133,44 @@ export function cmdImpact(
       ),
     ].slice(0, 10);
 
+    // Static test reachability: lintasan CALLS balik dari simbol target →
+    // simbol test yang masih memanggil salah satu seed (6 tingkat).
+    const reachable = new Map<string, number>();
+    try {
+      const seeds = db
+        .prepare(`SELECT id FROM symbols WHERE file_id = ? AND type != 'file'`)
+        .all((db.prepare(`SELECT file_id AS f FROM symbols WHERE id = ?`).get(center.id) as { f: number }).f) as { id: number }[];
+      const seen = new Set(seeds.map((s) => s.id));
+      let frontier = seeds.map((s) => s.id);
+      for (let d = 0; d < 6 && frontier.length > 0; d++) {
+        const next: number[] = [];
+        for (const id of frontier) {
+          const rows = db
+            .prepare(
+              `SELECT s.id AS src, f.path AS fp FROM relationships r
+               JOIN symbols s ON s.id = r.source_id
+               JOIN files f ON f.id = s.file_id
+               WHERE r.target_id = ? AND r.relationship_type = 'CALLS' LIMIT 100`
+            )
+            .all(id) as { src: number; fp: string }[];
+          for (const r of rows) {
+            if (seen.has(r.src)) continue;
+            seen.add(r.src);
+            next.push(r.src);
+            if (/(test|spec)/i.test(r.fp)) {
+              reachable.set(r.fp, Math.min(reachable.get(r.fp) ?? 99, d + 1));
+            }
+          }
+        }
+        frontier = next;
+      }
+    } catch {
+      // tabel hubungan atau skema lama — abaikan
+    }
+    const reachableTests = [...reachable.entries()]
+      .sort((a, b) => a[1] - b[1])
+      .slice(0, 10);
+
     const lines: string[] = [
       `# Impact: ${centerLabel}`,
       ``,
@@ -150,12 +189,16 @@ export function cmdImpact(
       `## Indirect (${indirect.size})`,
       ...[...indirect.values()]
         .slice(0, 15)
-        .map((v) => `- ${v.name} (${v.type}, ${v.file}) via ${v.via}`),
+        .map((v) => `- ${v.name} (${v.type}, ${v.file}) via ${v.via} [${v.evidence}]`),
       ...(indirect.size === 0 ? ["- (tidak ada)"] : []),
       ``,
       `## Tests`,
       ...testFiles.map((t) => `- ${t}`),
       ...(testFiles.length === 0 ? ["- (tidak ada test terkait di index)"] : []),
+      ``,
+      `## Tests via graph reachability (CALLS backward)`,
+      ...reachableTests.map(([f, d]) => `- ${f} (≤${d} hop)`),
+      ...(reachableTests.length === 0 ? ["- (tidak ada jalur CALLS ke test ditemukan)"] : []),
       ``,
       `## UI Components`,
       ...ui.map((u) => `- ${u}`),

@@ -13,17 +13,18 @@ export interface ContextOptions {
   escalate?: boolean;
   noRefresh?: boolean;
   mode?: "NORMAL" | "FAST" | "SAFE" | "AUDIT";
+  maxTokens?: number;
 }
 
 // Entry point utama agent (PRD §8.4): satu perintah, ScopeCairn yang
 // memutuskan seberapa banyak dikembalikan (SIMPLE ringkas / COMPLEX penuh).
-export function cmdContext(
+export async function cmdContext(
   repoRoot: string,
   task: string,
   opts: ContextOptions = {}
-): void {
+): Promise<void> {
   if (!opts.noRefresh) {
-    const { stats, bulk } = refreshIndex(repoRoot);
+    const { stats, bulk } = await refreshIndex(repoRoot);
     if (bulk) {
       console.log(
         `> Note: ${stats.inserted + stats.updated} file berubah ` +
@@ -126,6 +127,18 @@ export function cmdContext(
     }
     if (decisions) {
       out += `\n\n## Keputusan Arsitektur (.scopecairn/decisions.md)\n${decisions}\n`;
+    }
+    const maxTokens = opts.maxTokens;
+    if (maxTokens && maxTokens > 0 && Math.ceil(out.length / 4) > maxTokens) {
+      const parts = out.split(/\n(?=## )/);
+      for (const sec of ["Critical hotspots", "Circular dependency warning", "Dependencies", "Related Tests"]) {
+        if (Math.ceil(parts.join("\n").length / 4) <= maxTokens) break;
+        const i = parts.findIndex((p) => p.startsWith(`## ${sec}`));
+        if (i >= 0) parts.splice(i, 1);
+      }
+      out = parts.join("\n");
+      if (Math.ceil(out.length / 4) > maxTokens) out = out.slice(0, maxTokens * 4);
+      out += `\n\n## Note\nOutput dipangkas agar muat --max-tokens ${maxTokens} (≈ ${maxTokens * 4} char).\n`;
     }
     console.log(out);
   } finally {

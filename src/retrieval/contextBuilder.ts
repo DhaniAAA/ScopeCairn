@@ -78,7 +78,14 @@ export function buildContext(
     }
   }
 
-  // Related tests: edge TESTS ke file HIGH + file *.test.* di kandidat.
+  // Related tests: edge TESTS ke file HIGH + 2-hop callers (graph, seperti
+  // findAffectedTests) + file *.test.* di kandidat. Tanpa import dari
+  // commands/testselect agar lapisan retrieval tetap bersih.
+  const isTestFileLike = (p: string): boolean =>
+    p.includes(".test.") ||
+    p.includes(".spec.") ||
+    p.includes("__tests__") ||
+    (p.split("/").pop() ?? "").startsWith("test_");
   const testSet = new Set<string>();
   if (highFiles.length > 0) {
     const ph = highFiles.map(() => "?").join(",");
@@ -99,9 +106,62 @@ export function buildContext(
     } catch {
       // ignore
     }
+    // 2-hop: simbol HIGH -> callers (1-hop) -> callers-of-callers (2-hop).
+    // Bila caller tinggal di file test, anggap test terkait.
+    try {
+      const symRows = db
+        .prepare(
+          `SELECT s.id AS id FROM symbols s
+           JOIN files f ON f.id = s.file_id
+           WHERE f.path IN (${ph}) LIMIT 50`
+        )
+        .all(...highFiles) as { id: number }[];
+      const targetIds = symRows.map((r) => r.id);
+      if (targetIds.length > 0) {
+        const inClause = targetIds.map(() => "?").join(",");
+        const callerRows = db
+          .prepare(
+            `SELECT DISTINCT s.file_id AS fid, f.path AS p
+             FROM relationships r
+             JOIN symbols s ON s.id = r.source_id
+             JOIN files f ON f.id = s.file_id
+             WHERE r.target_id IN (${inClause})`
+          )
+          .all(...targetIds) as { fid: number; p: string }[];
+        const intermediateIds: number[] = [];
+        for (const c of callerRows) {
+          if (isTestFileLike(c.p)) testSet.add(c.p);
+        }
+        try {
+          const idRows = db
+            .prepare(`SELECT DISTINCT r.source_id AS id FROM relationships r WHERE r.target_id IN (${inClause}) LIMIT 100`)
+            .all(...targetIds) as { id: number }[];
+          intermediateIds.push(...idRows.map((r) => r.id));
+        } catch {
+          // ignore
+        }
+        if (intermediateIds.length > 0) {
+          const interClause = intermediateIds.map(() => "?").join(",");
+          const indirectRows = db
+            .prepare(
+              `SELECT DISTINCT f.path AS p
+               FROM relationships r
+               JOIN symbols s ON s.id = r.source_id
+               JOIN files f ON f.id = s.file_id
+               WHERE r.target_id IN (${interClause})`
+            )
+            .all(...intermediateIds) as { p: string }[];
+          for (const r of indirectRows) {
+            if (isTestFileLike(r.p)) testSet.add(r.p);
+          }
+        }
+      }
+    } catch {
+      // ignore — fallback ke TESTS edge + nama file saja
+    }
   }
   for (const r of ranked) {
-    if (/(test|spec)/i.test(r.file)) testSet.add(r.file);
+    if (isTestFileLike(r.file)) testSet.add(r.file);
   }
   const tests = [...testSet].slice(0, 10);
 

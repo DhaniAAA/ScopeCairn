@@ -2,7 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import path from "node:path";
 import { extractFile, testTarget } from "./extract/index.js";
 import { syncFileIndex } from "./retrieval/symbolIndex.js";
-import { evidenceOf, type RelationType } from "./extract/types.js";
+import { evidenceOf, type RelationType, type ExtractedImport } from "./extract/types.js";
 
 export interface IndexResult {
   symbols: number;
@@ -86,15 +86,21 @@ function methodSymbolId(
   return r ? r.id : null;
 }
 
-function resolveModuleToFile(
+interface ResolvedModule {
+  fileId: number;
+  fileSymId: number;
+}
+
+function resolveModuleFile(
   db: DatabaseSync,
   fromRel: string,
   spec: string
-): number | null {
-  if (!spec.startsWith(".")) return null; // external package — skip
+): ResolvedModule | null {
   const dir = fromRel.includes("/") ? fromRel.slice(0, fromRel.lastIndexOf("/")) : "";
-  const joined = path.posix.normalize((dir ? dir + "/" : "") + spec);
-  // TS ESM imports reference compiled ".js" for a ".ts" source — strip it.
+  const joined = spec.startsWith(".")
+    ? path.posix.normalize((dir ? dir + "/" : "") + spec)
+    : spec;
+
   const bases = [joined];
   const jsExt = joined.match(/\.(js|mjs|cjs|jsx)$/);
   if (jsExt) {
@@ -115,14 +121,40 @@ function resolveModuleToFile(
     const r = db
       .prepare(`SELECT id FROM files WHERE path = ?`)
       .get(c) as { id: number } | undefined;
-    if (r) {
+    if (r && c !== fromRel) {
       const s = db
         .prepare(`SELECT id FROM symbols WHERE file_id = ? AND type = 'file'`)
         .get(r.id) as { id: number } | undefined;
-      if (s) return s.id;
+      if (s) return { fileId: r.id, fileSymId: s.id };
     }
   }
+
+  // Non-relative import fallback (mis. Python module atau Go package)
+  if (!spec.startsWith(".")) {
+    const lastPart = spec.split("/").pop() ?? spec;
+    const match = db
+      .prepare(
+        `SELECT id, path FROM files WHERE (path = ? OR path LIKE ? OR path LIKE ?) AND path != ? LIMIT 1`
+      )
+      .get(spec, `%/${lastPart}.%`, `%/${lastPart}/index.%`, fromRel) as { id: number; path: string } | undefined;
+    if (match) {
+      const s = db
+        .prepare(`SELECT id FROM symbols WHERE file_id = ? AND type = 'file'`)
+        .get(match.id) as { id: number } | undefined;
+      if (s) return { fileId: match.id, fileSymId: s.id };
+    }
+  }
+
   return null;
+}
+
+function resolveModuleToFile(
+  db: DatabaseSync,
+  fromRel: string,
+  spec: string
+): number | null {
+  const res = resolveModuleFile(db, fromRel, spec);
+  return res ? res.fileSymId : null;
 }
 
 // Re-index one file: wipe its symbols (relations cascade), re-insert.
@@ -163,6 +195,11 @@ export function indexFileRelations(
     .all(fileId) as { id: number; name: string }[];
   for (const r of rows) if (!ids.has(r.name)) ids.set(r.name, r.id);
 
+  const localImports = new Map<string, ExtractedImport>();
+  for (const imp of extraction.imports ?? []) {
+    localImports.set(imp.localName, imp);
+  }
+
   const insRel = db.prepare(
     `INSERT INTO relationships(source_id, target_id, relationship_type, weight, confidence, evidence)
      VALUES (?, ?, ?, ?, ?, ?)`
@@ -187,11 +224,14 @@ export function indexFileRelations(
     );
   };
 
+  const importedFileIds = new Set<number>();
+
   for (const r of extraction.relations) {
     if (r.rel === "IMPORTS") {
-      const target = resolveModuleToFile(db, relPath, r.to);
-      if (target) {
-        insRel.run(fileSym, target, "IMPORTS", r.weight, r.confidence, evidenceOf("IMPORTS", r.confidence));
+      const target = resolveModuleFile(db, relPath, r.to);
+      if (target && target.fileSymId !== fileSym) {
+        importedFileIds.add(target.fileId);
+        insRel.run(fileSym, target.fileSymId, "IMPORTS", r.weight, r.confidence, evidenceOf("IMPORTS", r.confidence));
         rels++;
       }
       continue;
@@ -212,11 +252,99 @@ export function indexFileRelations(
       }
       continue;
     }
+    if (r.rel === "CALLS") {
+      const src = resolveLocal(r.from);
+      if (!src) continue;
+
+      let dst: number | null = null;
+      let conf = r.confidence;
+      let ev = evidenceOf("CALLS", conf, r.methodCall);
+
+      // Receiver-based call: e.g. u.format() or pkg.Func() or this.method()
+      if (r.receiver) {
+        if (r.receiver === "this" || r.receiver === "self") {
+          dst = ids.get(r.to) ?? symbolIdInFile(db, fileId, r.to);
+          if (dst) {
+            conf = 1.0;
+            ev = "EXTRACTED";
+          }
+        } else if (localImports.has(r.receiver)) {
+          const imp = localImports.get(r.receiver)!;
+          const targetMod = resolveModuleFile(db, relPath, imp.moduleSpecifier);
+          if (targetMod) {
+            const sym = db
+              .prepare(`SELECT id FROM symbols WHERE file_id = ? AND name = ? AND type != 'file' LIMIT 1`)
+              .get(targetMod.fileId, r.to) as { id: number } | undefined;
+            if (sym) {
+              dst = sym.id;
+              conf = 0.95;
+              ev = "EXTRACTED";
+            }
+          }
+        }
+      }
+
+      // Direct call or receiver not found in localImports
+      if (!dst) {
+        // Level 1: Same file local symbol
+        const local = ids.get(r.to) ?? symbolIdInFile(db, fileId, r.to);
+        if (local) {
+          dst = local;
+          conf = 1.0;
+          ev = "EXTRACTED";
+        }
+      }
+
+      // Level 2: Named import match
+      if (!dst && localImports.has(r.to)) {
+        const imp = localImports.get(r.to)!;
+        const targetMod = resolveModuleFile(db, relPath, imp.moduleSpecifier);
+        if (targetMod) {
+          const symName = imp.importedName === "default" || imp.importedName === "*" ? r.to : imp.importedName;
+          const sym = db
+            .prepare(`SELECT id FROM symbols WHERE file_id = ? AND name = ? AND type != 'file' LIMIT 1`)
+            .get(targetMod.fileId, symName) as { id: number } | undefined;
+          if (sym) {
+            dst = sym.id;
+            conf = 0.95;
+            ev = "EXTRACTED";
+          }
+        }
+      }
+
+      // Level 3: Wildcard / imported files check
+      if (!dst && importedFileIds.size > 0) {
+        const ph = [...importedFileIds].map(() => "?").join(",");
+        const sym = db
+          .prepare(`SELECT id FROM symbols WHERE file_id IN (${ph}) AND name = ? AND type != 'file' LIMIT 1`)
+          .get(...importedFileIds, r.to) as { id: number } | undefined;
+        if (sym) {
+          dst = sym.id;
+          conf = 0.7;
+          ev = "INFERRED";
+        }
+      }
+
+      // Level 4: Global heuristic fallback
+      if (!dst) {
+        dst = r.methodCall
+          ? methodSymbolId(db, fileId, ids, r.to)
+          : globalSymbolId(db, r.to, srcDir);
+        if (dst) {
+          conf = 0.3;
+          ev = "AMBIGUOUS";
+        }
+      }
+
+      if (dst && src !== dst) {
+        insRel.run(src, dst, "CALLS", r.weight, conf, ev);
+        rels++;
+      }
+      continue;
+    }
+
     const src = resolveLocal(r.from);
-    const dst =
-      r.rel === "CALLS" && r.methodCall
-        ? methodSymbolId(db, fileId, ids, r.to)
-        : (ids.get(r.to) ?? globalSymbolId(db, r.to, srcDir));
+    const dst = ids.get(r.to) ?? globalSymbolId(db, r.to, srcDir);
     if (src && dst && src !== dst) {
       insRel.run(src, dst, r.rel, r.weight, r.confidence, evidenceOf(r.rel as RelationType, r.confidence, r.methodCall));
       rels++;

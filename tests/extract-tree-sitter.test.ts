@@ -37,6 +37,62 @@ test("HTML dan Vue mengenali elemen id", () => {
   assert.ok(extractFile("Widget.vue", `<template><div id="root"></div></template>`).symbols.some((s) => s.name === "root"));
 });
 
+test("ekstraksi named import dan receiver call pada TypeScript", () => {
+  const result = extractFile("src/a.ts", `
+import { add, multiply as mul } from "./math";
+import * as utils from "./utils";
+import DefaultService from "./service";
+
+export function calc() {
+  add(1, 2);
+  mul(2, 3);
+  utils.format();
+  DefaultService.run();
+}
+`);
+  assert.ok(result.imports?.some((i) => i.localName === "add" && i.importedName === "add" && i.moduleSpecifier === "./math"));
+  assert.ok(result.imports?.some((i) => i.localName === "mul" && i.importedName === "multiply" && i.moduleSpecifier === "./math"));
+  assert.ok(result.imports?.some((i) => i.localName === "utils" && i.importedName === "*" && i.moduleSpecifier === "./utils"));
+  assert.ok(result.imports?.some((i) => i.localName === "DefaultService" && i.importedName === "default" && i.moduleSpecifier === "./service"));
+
+  assert.ok(result.relations.some((r) => r.from === "calc" && r.to === "add" && r.rel === "CALLS"));
+  assert.ok(result.relations.some((r) => r.from === "calc" && r.to === "format" && r.receiver === "utils"));
+});
+
+test("ekstraksi named import pada Python", () => {
+  const result = extractFile("src/a.py", `
+from math_lib import add, multiply as mul
+import os
+
+def run():
+    add(1, 2)
+    os.getenv("KEY")
+`);
+  assert.ok(result.imports?.some((i) => i.localName === "add" && i.importedName === "add" && i.moduleSpecifier === "math_lib"));
+  assert.ok(result.imports?.some((i) => i.localName === "mul" && i.importedName === "multiply" && i.moduleSpecifier === "math_lib"));
+  assert.ok(result.imports?.some((i) => i.localName === "os" && i.importedName === "*" && i.moduleSpecifier === "os"));
+  assert.ok(result.relations.some((r) => r.from === "run" && r.to === "getenv" && r.receiver === "os"));
+});
+
+test("ekstraksi import dan receiver pada Go", () => {
+  const result = extractFile("src/a.go", `
+package main
+import (
+    "fmt"
+    mymath "example.com/math"
+)
+
+func run() {
+    fmt.Println("hi")
+    mymath.Compute()
+}
+`);
+  assert.ok(result.imports?.some((i) => i.localName === "fmt" && i.moduleSpecifier === "fmt"));
+  assert.ok(result.imports?.some((i) => i.localName === "mymath" && i.moduleSpecifier === "example.com/math"));
+  assert.ok(result.relations.some((r) => r.from === "run" && r.to === "Println" && r.receiver === "fmt"));
+  assert.ok(result.relations.some((r) => r.from === "run" && r.to === "Compute" && r.receiver === "mymath"));
+});
+
 for (const [path, source, expected] of [
   ["src/a.js", "function greet() { return ok(); }", "greet"],
   ["src/a.java", "class Hello { void greet() { ok(); } }", "greet"],

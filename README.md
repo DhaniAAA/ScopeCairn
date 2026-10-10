@@ -36,7 +36,7 @@ No MCP server, no embeddings, no network calls, no telemetry.
 - **Auto-refresh** — `context` and `impact` re-index changed files first;
   run `scan` after editing to close the loop.
 - **Framework adapters** — Next.js (App + Pages Router routes),
-  Prisma models, and Drizzle tables/queries detected automatically.
+  Prisma models, Drizzle tables/queries, Express, FastAPI, NestJS (controllers, routes, injectables), Django (urls, models), SQLAlchemy, and Vue SFC detected automatically.
 - **Multi-language** — TypeScript, JavaScript, Python, Java, Go, Rust,
   PHP, C#, C/C++, Ruby, HTML, Vue SFC (plus config/schema files as
   graph nodes).
@@ -157,14 +157,18 @@ scopecairn agents list
 | `read symbol <name>` | Symbol-level source excerpt (not whole files) |
 | `<agent> install` | Per-agent setup: `antigravity`, `claude`, `gemini`, `cursor`, `windsurf`, `copilot`, `kiro` (each also `uninstall`; `agents list` to see all) |
 | `dashboard` | Generate local HTML dashboard at `.scopecairn/dashboard.html` |
-| `test-select <target>` | List test files affected by a file/symbol change target |
+| `test-select <target> [--run]` | List affected test files via graph dependency traversal & runner detection (`--run` executes runner) |
+| `verify [--task <t>] [--strict]` | Post-edit guard: check modified protected files, task scope creep, and circular dependency regressions |
+| `diff` | Structural symbol-level diff of working tree vs HEAD with breaking impact alerts |
+| `arch-check [--init]` | Check architectural layer rules & disallowed import boundaries (`--init` scaffolds `.scopecairn/arch.json`) |
+| `watch [--debounce <ms>]` | Daemon mode: auto-refresh index in background on file saves |
 | `doctor --verbose` | Also surface adapter/graph errors from `.scopecairn/last-run.log` to stderr |
 | `benchmark [--tune]` | Retrieval recall, irrelevant ratio, context reduction + weight calibration |
 | `update [--check]` | Update ScopeCairn to the latest npm release (`--check` only checks) |
 
-Agent commands (`context`, `impact`, `read`, `graph`, `status`, `doctor`)
+Agent commands (`context`, `impact`, `read`, `graph`, `status`, `doctor`, `verify`, `diff`, `test-select`, `arch-check`)
 are read-only toward source and only write to `.scopecairn/` — safe to
-allowlist. `init`, `scan`, and `rebuild` are manual/user-side commands.
+allowlist. `init`, `scan`, `rebuild`, and `watch` are manual/user-side commands.
 
 ## Framework adapters
 
@@ -178,6 +182,8 @@ No configuration needed.
 | `drizzle` | `drizzle*` paths/config, `db/` schemas | `model` symbols from `pgTable`/`sqliteTable`/`mysqlTable`; `QUERIES` from `db.query.*` relational and `db.select/insert/update/delete` builder calls |
 | `express` | `package.json` deps | Route symbols from `app/router.METHOD(path)`, handler edges |
 | `fastapi` | `.py` routes, requirements/pyproject | Route symbols from `@app.METHOD("/path")` decorators |
+| `nestjs` | `*.controller.ts`, `*.service.ts`, `nest-cli.json` | Route symbols from `@Controller` and `@Get/@Post/...` decorators, `ROUTES_TO` handler edges, `@Injectable()` service providers |
+| `django` | `manage.py`, `urls.py`, `models.py` | Route symbols from `path()`/`re_path()` in `urls.py`, `ROUTES_TO` handler edges, `model` symbols from `models.Model` |
 | `sqlalchemy` | requirements/pyproject | `model` symbols from `class X(Base)`/`__tablename__`; `QUERIES` from `session.query/select` |
 | `vue` | `.vue` SFCs, `package.json` deps | `component` symbols per SFC; `IMPORTS` edges from used components in template |
 

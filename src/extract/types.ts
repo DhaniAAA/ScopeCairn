@@ -39,6 +39,12 @@ export interface ExtractedSymbol {
   doc?: string;
 }
 
+export interface ExtractedImport {
+  localName: string;
+  importedName: string;
+  moduleSpecifier: string;
+}
+
 export interface RawRelation {
   from: string;
   fromType?: SymbolType;
@@ -48,11 +54,14 @@ export interface RawRelation {
   confidence: number;
   /** True bila call site berbentuk `obj.name(` — resolusi dibatasi ke method. */
   methodCall?: boolean;
+  /** Receiver objek/namespace (mis. `obj` pada `obj.func()` atau `pkg` pada `pkg.Func()`). */
+  receiver?: string;
 }
 
 export interface FileExtraction {
   symbols: ExtractedSymbol[];
   relations: RawRelation[];
+  imports?: ExtractedImport[];
 }
 
 export type EdgeEvidence = "EXTRACTED" | "INFERRED" | "AMBIGUOUS";

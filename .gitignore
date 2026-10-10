@@ -3,3 +3,7 @@ dist/
 .scopecairn/
 *.log
 .DS_Store
+.kiro/
+.claude-plugin/
+.claude/
+.agent/

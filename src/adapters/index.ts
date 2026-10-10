@@ -13,6 +13,8 @@ import {
   deriveSqlAlchemyQueries,
 } from "./sqlalchemy.js";
 import { vueAdapter } from "./vue.js";
+import { nestjsAdapter } from "./nestjs.js";
+import { djangoAdapter } from "./django.js";
 import { syncFileIndex } from "../retrieval/symbolIndex.js";
 import { logError } from "../log.js";
 
@@ -25,6 +27,8 @@ const ADAPTERS: FrameworkAdapter[] = [
   nextjsAdapter,
   expressAdapter,
   fastapiAdapter,
+  nestjsAdapter,
+  djangoAdapter,
   vueAdapter,
 ];
 

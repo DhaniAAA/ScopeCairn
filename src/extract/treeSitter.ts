@@ -1,7 +1,7 @@
 import type { Node } from "web-tree-sitter";
 import { detectLanguage } from "../languages.js";
 import { withSyntaxTree } from "../treesitter.js";
-import { WEIGHT, type FileExtraction, type SymbolType, type RelationType } from "./types.js";
+import { WEIGHT, type FileExtraction, type SymbolType, type RelationType, type ExtractedImport } from "./types.js";
 
 const GRAMMARS: Record<string, string> = {
   typescript: "typescript", javascript: "javascript", python: "python", java: "java",
@@ -114,12 +114,129 @@ function hasJsx(node: Node): boolean {
   return children(node).some(hasJsx);
 }
 
+function extractImportItems(node: Node, grammar: string): ExtractedImport[] {
+  const items: ExtractedImport[] = [];
+  if (grammar === "typescript" || grammar === "javascript" || grammar === "tsx") {
+    const sourceNode = node.childForFieldName("source") ?? children(node).find((c) => c.type.includes("string"));
+    const specifier = sourceNode ? stringValue(sourceNode) : null;
+    if (specifier) {
+      for (const child of children(node)) {
+        if (child.type === "import_clause") {
+          for (const sub of children(child)) {
+            if (sub.type === "identifier") {
+              items.push({ localName: sub.text, importedName: "default", moduleSpecifier: specifier });
+            } else if (sub.type === "named_imports") {
+              for (const spec of children(sub)) {
+                if (spec.type === "import_specifier") {
+                  const imported = spec.childForFieldName("name")?.text ?? identifier(spec);
+                  const local = spec.childForFieldName("alias")?.text ?? imported;
+                  if (local && imported) {
+                    items.push({ localName: local, importedName: imported, moduleSpecifier: specifier });
+                  }
+                }
+              }
+            } else if (sub.type === "namespace_import") {
+              const id = children(sub).find((c) => c.type === "identifier");
+              if (id) {
+                items.push({ localName: id.text, importedName: "*", moduleSpecifier: specifier });
+              }
+            }
+          }
+        }
+      }
+    }
+  } else if (grammar === "python") {
+    if (node.type === "import_from_statement") {
+      const modNode = node.childForFieldName("module_name");
+      const modName = modNode ? modNode.text : (stringValue(node) ?? "");
+      const findDotted = (n: Node) => {
+        if (n === modNode) return;
+        if (n.type === "aliased_import") {
+          const name = n.childForFieldName("name")?.text;
+          const alias = n.childForFieldName("alias")?.text ?? name;
+          if (name && alias) items.push({ localName: alias, importedName: name, moduleSpecifier: modName });
+          return;
+        }
+        if (n.type === "dotted_name" || n.type === "identifier") {
+          items.push({ localName: n.text, importedName: n.text, moduleSpecifier: modName });
+          return;
+        }
+        for (const c of children(n)) findDotted(c);
+      };
+      for (const c of children(node)) {
+        if (c !== modNode && c.type !== "from" && c.type !== "import") findDotted(c);
+      }
+    } else if (node.type === "import_statement") {
+      for (const child of children(node)) {
+        if (child.type === "dotted_name") {
+          items.push({ localName: child.text, importedName: "*", moduleSpecifier: child.text });
+        } else if (child.type === "aliased_import") {
+          const name = child.childForFieldName("name")?.text;
+          const alias = child.childForFieldName("alias")?.text ?? name;
+          if (name && alias) {
+            items.push({ localName: alias, importedName: "*", moduleSpecifier: name });
+          }
+        }
+      }
+    }
+  } else if (grammar === "go") {
+    const findSpecs = (n: Node): Node[] => {
+      if (n.type === "import_spec") return [n];
+      return children(n).flatMap(findSpecs);
+    };
+    for (const spec of findSpecs(node)) {
+      const pathNode = spec.childForFieldName("path") ?? children(spec).find((c) => c.type.includes("string"));
+      const p = pathNode ? stringValue(pathNode) : null;
+      if (p) {
+        const aliasNode = spec.childForFieldName("name");
+        const local = aliasNode?.text || p.split("/").pop() || p;
+        items.push({ localName: local, importedName: "*", moduleSpecifier: p });
+      }
+    }
+  } else if (grammar === "rust") {
+    const text = node.text.replace(/^use\s+/, "").replace(/;$/, "").trim();
+    if (text) {
+      const parts = text.split("::");
+      const last = parts[parts.length - 1];
+      if (last && !last.includes("{")) {
+        const local = last.includes(" as ") ? last.split(" as ")[1].trim() : last;
+        const imported = last.includes(" as ") ? last.split(" as ")[0].trim() : last;
+        const mod = parts.slice(0, -1).join("::");
+        items.push({ localName: local, importedName: imported, moduleSpecifier: mod || text });
+      }
+    }
+  } else if (grammar === "java") {
+    const text = node.text.replace(/^import\s+(static\s+)?/, "").replace(/;$/, "").trim();
+    if (text) {
+      const last = text.split(".").pop();
+      if (last && last !== "*") {
+        items.push({ localName: last, importedName: last, moduleSpecifier: text });
+      }
+    }
+  } else if (grammar === "c_sharp") {
+    const text = node.text.replace(/^using\s+/, "").replace(/;$/, "").trim();
+    if (text) {
+      if (text.includes("=")) {
+        const [alias, full] = text.split("=").map((s) => s.trim());
+        items.push({ localName: alias, importedName: "*", moduleSpecifier: full });
+      } else {
+        const last = text.split(".").pop();
+        if (last) {
+          items.push({ localName: last, importedName: "*", moduleSpecifier: text });
+        }
+      }
+    }
+  }
+  return items;
+}
+
 export function extractSyntaxTree(relPath: string, source: string): FileExtraction {
   const grammar = grammarForPath(relPath);
   if (!grammar) return { symbols: [], relations: [] };
   return withSyntaxTree(grammar, source, (root) => {
     const symbols: FileExtraction["symbols"] = [];
     const relations: FileExtraction["relations"] = [];
+    const imports: ExtractedImport[] = [];
     const emitted = new Set<string>();
     const add = (name: string, type: SymbolType, node: Node) => {
       const key = `${type}:${name}:${node.startIndex}`;
@@ -173,6 +290,9 @@ export function extractSyntaxTree(relPath: string, source: string): FileExtracti
       }
 
       if (IMPORTS.has(node.type)) {
+        const extracted = extractImportItems(node, grammar);
+        for (const item of extracted) imports.push(item);
+
         const target = stringValue(node) ?? node.childForFieldName("module_name")?.text ??
           (node.type === "import_statement" || node.type === "import_from_statement"
             ? children(node).map(identifier).find(Boolean) : null);
@@ -193,10 +313,31 @@ export function extractSyntaxTree(relPath: string, source: string): FileExtracti
       if (CALLS.has(node.type)) {
         const callee = node.childForFieldName("function") ?? node.childForFieldName("name") ?? children(node)[0];
         const method = !!callee && (callee.type.includes("member") || callee.type.includes("selector") || callee.type.includes("attribute") || callee.type.includes("field"));
-        const target = callee && (method
-          ? identifier(callee.childForFieldName("property") ?? callee.childForFieldName("field") ?? callee.childForFieldName("attribute") ?? children(callee).at(-1) ?? null)
-          : identifier(callee));
-        if (target) relate(owner, target, "CALLS", method ? 0.6 : 0.8, method);
+        let target: string | null = null;
+        let receiver: string | undefined = undefined;
+        if (callee) {
+          if (method) {
+            target = identifier(callee.childForFieldName("property") ?? callee.childForFieldName("field") ?? callee.childForFieldName("attribute") ?? children(callee).at(-1) ?? null);
+            const objNode = callee.childForFieldName("object") ?? callee.childForFieldName("value") ?? callee.childForFieldName("operand") ?? children(callee)[0];
+            if (objNode) {
+              const rName = identifier(objNode);
+              if (rName) receiver = rName;
+            }
+          } else {
+            target = identifier(callee);
+          }
+        }
+        if (target) {
+          relations.push({
+            from: owner,
+            to: target,
+            rel: "CALLS",
+            weight: WEIGHT["CALLS"],
+            confidence: method ? 0.6 : 0.8,
+            methodCall: method,
+            ...(receiver ? { receiver } : {}),
+          });
+        }
       }
       if ((grammar === "html" || grammar === "vue") && node.type === "attribute") {
         const parts = children(node);
@@ -208,6 +349,6 @@ export function extractSyntaxTree(relPath: string, source: string): FileExtracti
       for (const child of children(node)) visit(child, nextOwner, inClass);
     };
     visit(root, "__file__", false);
-    return { symbols, relations };
+    return { symbols, relations, ...(imports.length > 0 ? { imports } : {}) };
   });
 }

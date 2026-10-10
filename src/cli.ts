@@ -15,6 +15,10 @@ import { cmdInit } from "./commands/init.js";
 import { cmdBenchmark } from "./commands/benchmark.js";
 import { cmdDashboard } from "./commands/dashboard.js";
 import { cmdTestSelect } from "./commands/testselect.js";
+import { cmdVerify } from "./commands/verify.js";
+import { cmdDiff } from "./commands/diff.js";
+import { cmdArchCheck } from "./commands/archcheck.js";
+import { cmdWatch } from "./commands/watch.js";
 import { cmdUpdate } from "./commands/update.js";
 import { registerAgentCommands } from "./commands/agents.js";
 import pkg from "../package.json" with { type: "json" };
@@ -94,7 +98,39 @@ program
 program
   .command("test-select <target>")
   .description("List test files affected by a change target (file/symbol)")
-  .action((target: string) => cmdTestSelect(repoRoot(), target));
+  .option("--run", "execute the affected test runner command directly")
+  .option("--json", "output results as JSON")
+  .action((target: string, opts: { run?: boolean; json?: boolean }) => cmdTestSelect(repoRoot(), target, opts));
+
+program
+  .command("verify")
+  .description("Verify working tree changes: protected files, task scope, circular dependencies")
+  .option("--task <task>", "task description to check scope creep against")
+  .option("--strict", "fail if any changes fall outside task scope")
+  .option("--json", "output results as JSON")
+  .option("--no-refresh", "skip index auto-refresh")
+  .action((opts: { task?: string; strict?: boolean; json?: boolean; noRefresh?: boolean }) =>
+    cmdVerify(repoRoot(), opts)
+  );
+
+program
+  .command("diff")
+  .description("Structural symbol-level diff of working tree vs HEAD")
+  .option("--json", "output results as JSON")
+  .action((opts: { json?: boolean }) => cmdDiff(repoRoot(), opts));
+
+program
+  .command("arch-check")
+  .description("Check architectural layer rules and import boundaries")
+  .option("--init", "generate initial .scopecairn/arch.json configuration template")
+  .option("--json", "output results as JSON")
+  .action((opts: { init?: boolean; json?: boolean }) => cmdArchCheck(repoRoot(), opts));
+
+program
+  .command("watch")
+  .description("Watch repository files and refresh index automatically in background")
+  .option("--debounce <ms>", "debounce time in milliseconds (default 300)", parseInt)
+  .action((opts: { debounce?: number }) => cmdWatch(repoRoot(), opts));
 
 program
   .command("graph <symbol>")

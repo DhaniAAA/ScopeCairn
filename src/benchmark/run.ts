@@ -36,7 +36,7 @@ function fileChars(repoRoot: string, rel: string): number {
 // Baseline (§18.2): agent tanpa ScopeCairn membaca file penuh yang akhirnya
 // relevan + ~2x eksplorasi buta (faktor konservatif dari alur §2:
 // list→grep→read→grep→read ≈ 2x file relevan dibaca penuh).
-// Optimized: excerpt per simbol top (rata-rata 1KB/simbol,上限 file penuh).
+// Optimized: excerpt per simbol top (rata-rata 1KB/simbol, maksimal 1 file penuh).
 export function runBenchmark(
   db: DatabaseSync,
   repoRoot: string,

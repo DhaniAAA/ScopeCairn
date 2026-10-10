@@ -8,6 +8,7 @@ export function benchmarkReport(
   gitAvailable: boolean
 ): string {
   const pct = (x: number): string => `${(x * 100).toFixed(0)}%`;
+  const escCell = (s: string): string => s.replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
   const lines: string[] = [
     `# ScopeCairn Benchmark`,
     ``,
@@ -30,17 +31,17 @@ export function benchmarkReport(
   ];
   for (const t of summary.tasks) {
     lines.push(
-      `| ${t.task} | ${pct(t.recall)} | ${pct(t.irrelevantRatio)} | ${t.hits.join(", ") || "-"} | ${t.highFiles.join(", ") || "-"} |`
+      `| ${escCell(t.task)} | ${pct(t.recall)} | ${pct(t.irrelevantRatio)} | ${escCell(t.hits.join(", ") || "-")} | ${escCell(t.highFiles.join(", ") || "-")} |`
     );
   }
   if (tune) {
-    const b = tune.best;
+    const best = tune.best;
     lines.push(
       ``,
       `## Kalibrasi bobot (${tune.tried} kombinasi)`,
       ``,
       `Baseline: seed=${tune.baseline.weights.wSeed} prox=${tune.baseline.weights.wProximity} cent=${tune.baseline.weights.wCentrality} → recall ${pct(tune.baseline.avgRecall)}, irrelevant ${pct(tune.baseline.avgIrrelevant)}`,
-      `Terbaik: seed=${b.weights.wSeed} prox=${b.weights.wProximity} cent=${b.weights.wCentrality} → recall ${pct(b.avgRecall)}, irrelevant ${pct(b.avgIrrelevant)}`,
+      `Terbaik: seed=${best.weights.wSeed} prox=${best.weights.wProximity} cent=${best.weights.wCentrality} → recall ${pct(best.avgRecall)}, irrelevant ${pct(best.avgIrrelevant)}`,
       tune.best.avgRecall - tune.baseline.avgRecall > 0.05
         ? `Rekomendasi: terapkan ke \`.scopecairn/config.yml\` (gain > 5%).`
         : `Rekomendasi: pertahankan default (gain ≤ 5% — hindari overfit ke 12 task).`

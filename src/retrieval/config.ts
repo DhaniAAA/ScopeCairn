@@ -119,7 +119,14 @@ export function ensureDefaultFiles(repoRoot: string): void {
   if (!fs.existsSync(gloPath)) {
     fs.writeFileSync(
       gloPath,
-      `# Sinonim domain (opsional). Format: istilah: [alias1, alias2]\n# approval: [authorize, persetujuan]\n`
+      `# Sinonim domain (opsional). Format: istilah: [alias1, alias2]\n` +
+        `# approval: [authorize, persetujuan]\n` +
+        `# Bawaan morfologi Inggris agar recall seed tak hilang oleh\n` +
+        `# bentuk kata (ranking/rank, configuration/config, dst).\n` +
+        `ranking: [rank]\n` +
+        `configuration: [config]\n` +
+        `weights: [weight]\n` +
+        `dependencies: [dependency]\n`
     );
   }
   ensureProtectedFile(repoRoot);

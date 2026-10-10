@@ -184,12 +184,15 @@ export function retrieve(
   ranked.sort((a, b) => b.score - a.score);
   // Fallback: bila hanya simpul file yang cocok (mis. package.json, skema) —
   // kembalikan file itu agar Protected/scope tetap terlihat.
+  // Bila ranked tak kosong tapi ada file-seed kuat (task menyebut nama file,
+  // mis. "package json") yang belum terwakili, sertakan maksimal 2 agar
+  // file config tak hilang di balik simbol dengan skor proximity/centrality.
+  const fileSeeds = seeds
+    .map((s) => ({ id: s.symbolId, seed: s.bm25, m: meta.get(s.symbolId) }))
+    .filter((s) => s.m && s.m.type === "file")
+    .sort((a, b) => b.seed - a.seed)
+    .slice(0, 5);
   if (ranked.length === 0 && skippedFiles > 0) {
-    const fileSeeds = seeds
-      .map((s) => ({ id: s.symbolId, seed: s.bm25, m: meta.get(s.symbolId) }))
-      .filter((s) => s.m && s.m.type === "file")
-      .sort((a, b) => b.seed - a.seed)
-      .slice(0, 5);
     for (const f of fileSeeds) {
       ranked.push({
         id: f.id,
@@ -202,6 +205,25 @@ export function retrieve(
         reason: "seed",
       });
     }
+  } else if (fileSeeds.length > 0) {
+    const covered = new Set(ranked.map((r) => r.file));
+    let added = 0;
+    for (const f of fileSeeds) {
+      if (added >= 2 || f.seed < 0.5 || covered.has(f.m!.file)) continue;
+      ranked.push({
+        id: f.id,
+        name: f.m!.name,
+        type: "file",
+        file: f.m!.file,
+        signature: "",
+        score: config.wSeed * f.seed + 0.05,
+        parts: { seed: f.seed, proximity: 0, centrality: 0, recency: 0, cochange: 0 },
+        reason: "seed",
+      });
+      covered.add(f.m!.file);
+      added++;
+    }
+    ranked.sort((a, b) => b.score - a.score);
   }
   return { tokens, seeds: seeds.map((s) => s.symbolId), ranked: ranked.slice(0, config.topN), config, gitAvailable: git.available };
 }

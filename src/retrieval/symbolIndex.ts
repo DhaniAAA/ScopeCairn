@@ -42,7 +42,9 @@ export interface SeedHit {
 export function seedSearch(
   db: DatabaseSync,
   tokens: string[],
-  limit = 30
+  // 50: query bervarian (stemming+glossary) punya lebih banyak term OR,
+  // kandidat perlu lebih longgar sebelum RANK memangkas ke topN.
+  limit = 50
 ): SeedHit[] {
   if (tokens.length === 0) return [];
   const q = tokens
@@ -62,10 +64,39 @@ export function seedSearch(
     return [];
   }
   if (rows.length === 0) return [];
+  // Presisi: hitung token-task berbeda yang cocok per simbol. Seed yang
+  // hanya cocok 1 token (mis. "add", "test") diturunkan ×0.6 agar tak
+  // mengalahkan file yang cocok ≥2 konsep. Hanya bila task ≥4 token
+  // (task pendek tak dituntut multi-cocok). Tanpa re-index: baca kolom
+  // tokens yang sudah ada.
+  const multi = new Map<number, number>();
+  if (tokens.length >= 4) {
+    try {
+      const ids = rows.map((r) => r.symbol_id);
+      const ph = ids.map(() => "?").join(",");
+      const trows = db
+        .prepare(`SELECT symbol_id, tokens FROM symbol_index WHERE symbol_id IN (${ph})`)
+        .all(...ids) as { symbol_id: number; tokens: string }[];
+      const tset = new Set(tokens);
+      for (const t of trows) {
+        const toks = new Set(t.tokens.split(" ").filter(Boolean));
+        let n = 0;
+        for (const tok of tset) if (toks.has(tok)) n++;
+        multi.set(t.symbol_id, n);
+      }
+    } catch {
+      // abaikan — pakai skor mentah
+    }
+  }
   const worst = Math.min(...rows.map((r) => r.rank)); // most negative
   const range = Math.max(1e-9, 0 - worst + 1);
-  return rows.map((r) => ({
-    symbolId: r.symbol_id,
-    bm25: Math.max(0, Math.min(1, (0 - r.rank + 0.5) / range)),
-  }));
+  return rows.map((r) => {
+    const bm25 = Math.max(0, Math.min(1, (0 - r.rank + 0.5) / range));
+    // Lunak (×0.85) dan hanya untuk cocok-tunggal yang LEMAH (bm25 < 0.7):
+    // istilah langka yang cocok tunggal (mis. "health" di doc) informatif
+    // dan dipertahankan; junk umum ("add", "test") yang diturunkan.
+    const weakSingle =
+      multi.size > 0 && (multi.get(r.symbol_id) ?? 0) < 2 && bm25 < 0.7;
+    return { symbolId: r.symbol_id, bm25: bm25 * (weakSingle ? 0.85 : 1) };
+  });
 }

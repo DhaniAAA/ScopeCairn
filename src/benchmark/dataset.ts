@@ -56,4 +56,36 @@ export const BENCHMARK_TASKS: BenchmarkTask[] = [
     task: "Health check integration files prefix",
     expected: ["src/commands/doctor.ts", "src/integrate/detect.ts"],
   },
+  {
+    task: "Django routes models registration",
+    expected: ["src/adapters/django.ts", "src/adapters/index.ts"],
+  },
+  {
+    task: "Nestjs routes injectables",
+    expected: ["src/adapters/nestjs.ts", "src/adapters/index.ts"],
+  },
+  {
+    task: "Watch command file changes",
+    expected: ["src/commands/watch.ts", "src/scanner.ts"],
+  },
+  {
+    task: "Architecture check layer rules",
+    expected: ["src/commands/archcheck.ts"],
+  },
+  {
+    task: "Diff breaking change detection",
+    expected: ["src/commands/diff.ts"],
+  },
+  {
+    task: "Verify protected scope cycles",
+    expected: ["src/commands/verify.ts", "src/scope/protected.ts"],
+  },
+  {
+    task: "Visual graph HTML explorer",
+    expected: ["src/graph/visual.ts", "src/graph/clusters.ts"],
+  },
+  {
+    task: "Tokenizer stemming plural forms",
+    expected: ["src/retrieval/tokenize.ts", "src/retrieval/symbolIndex.ts"],
+  },
 ];

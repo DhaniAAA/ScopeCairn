@@ -171,6 +171,68 @@ export async function cmdImpact(
       .sort((a, b) => a[1] - b[1])
       .slice(0, 10);
 
+    // Bukti file:line — symbols punya start_line, neighbors tidak membawanya.
+    const lineOf = (id: number): number => {
+      try {
+        const r = db.prepare(`SELECT start_line AS l FROM symbols WHERE id = ?`).get(id) as { l: number } | undefined;
+        return r?.l ?? 1;
+      } catch {
+        return 1;
+      }
+    };
+    const withLine = (file: string, id: number): string => `${file}:${lineOf(id)}`;
+
+    // Endpoint & model berkaitan: simbol type route/model di direct + indirect.
+    const indirectEntries = [...indirect.entries()] as [number, { name: string; type: string; file: string }][];
+    const endpoints = [
+      ...new Set([
+        ...direct.filter((e) => e.other.type === "route").map((e) => `${e.other.name} (${withLine(e.other.file, e.other.id)})`),
+        ...indirectEntries.filter(([, v]) => v.type === "route").map(([id, v]) => `${v.name} (${withLine(v.file, id)})`),
+      ]),
+    ].slice(0, 10);
+    const models = [
+      ...new Set([
+        ...direct.filter((e) => e.other.type === "model").map((e) => `${e.other.name} (${withLine(e.other.file, e.other.id)})`),
+        ...indirectEntries.filter(([, v]) => v.type === "model").map(([id, v]) => `${v.name} (${withLine(v.file, id)})`),
+      ]),
+    ].slice(0, 10);
+
+    // Tingkat risiko: protected / cycle / fan-in / sebaran file. Aditif, tanpa
+    // mengubah seksi lama agar konsumen CLI lama tidak pecah.
+    const reasons: string[] = [];
+    let risk: "HIGH" | "MED" | "LOW" = "LOW";
+    try {
+      const centerFile = center.file;
+      if (isProtected(centerFile, loadProtectedPatterns(repoRoot))) {
+        risk = "HIGH";
+        reasons.push(`target Protected (${centerFile})`);
+      }
+      const cycRows = db.prepare(`SELECT nodes_json AS js FROM cycles`).all() as { js: string }[];
+      let inCycle = false;
+      for (const c of cycRows) {
+        try {
+          const nodes = JSON.parse(c.js) as number[];
+          if (nodes.includes(center.id)) { inCycle = true; break; }
+        } catch { /* ignore */ }
+      }
+      if (inCycle) {
+        risk = "HIGH";
+        reasons.push(`di dalam dependency cycle`);
+      }
+      const fanIn = direct.filter((e) => e.rel === "CALLS" && e.direction === "in").length
+        + direct.filter((e) => e.rel === "IMPORTS" && e.direction === "in").length;
+      if (fanIn >= 10 || directFiles.length >= 10) {
+        risk = "HIGH";
+        reasons.push(`fan-in ${fanIn}, ${directFiles.length} file langsung`);
+      } else if (fanIn >= 3 || testFiles.length >= 3 || reachableTests.length >= 3) {
+        if (risk === "LOW") risk = "MED";
+        reasons.push(`fan-in ${fanIn}, ${testFiles.length + reachableTests.length} test terkait`);
+      }
+      if (reasons.length === 0) reasons.push(`fan-in ${fanIn}, ${directFiles.length} file langsung`);
+    } catch {
+      reasons.push("risiko tak terhitung (skema lama)");
+    }
+
     const lines: string[] = [
       `# Impact: ${centerLabel}`,
       ``,
@@ -203,6 +265,18 @@ export async function cmdImpact(
       `## UI Components`,
       ...ui.map((u) => `- ${u}`),
       ...(ui.length === 0 ? ["- (tidak ada)"] : []),
+      ``,
+      `## Endpoints`,
+      ...endpoints.map((e) => `- ${e}`),
+      ...(endpoints.length === 0 ? ["- (tidak ada endpoint terkait)"] : []),
+      ``,
+      `## Models`,
+      ...models.map((m) => `- ${m}`),
+      ...(models.length === 0 ? ["- (tidak ada model terkait)"] : []),
+      ``,
+      `## Risk: ${risk}`,
+      ...reasons.map((r) => `- ${r}`),
+      `- Bukti pusat: ${withLine(center.file, center.id)}`,
     ];
     console.log(lines.join("\n"));
   } finally {

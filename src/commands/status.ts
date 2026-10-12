@@ -40,6 +40,12 @@ export function cmdStatus(repoRoot: string): void {
     }
     console.log(`Last scan: ${lastScan}`);
     try {
+      const commits = (db.prepare(`SELECT COUNT(*) AS n FROM commits`).get() as { n: number }).n;
+      if (commits > 0) console.log(`History: ${commits} commits`);
+    } catch {
+      // pre-history DB
+    }
+    try {
       const paths = (
         db.prepare(`SELECT path FROM files`).all() as { path: string }[]
       ).map((r) => r.path);

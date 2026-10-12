@@ -89,10 +89,39 @@ export async function cmdDoctor(repoRoot: string, opts?: { verbose?: boolean }):
     console.log(`i Graph metrics unavailable (run \`scopecairn scan\` first)`);
   }
 
+  // Analogi riwayat: jumlah commit terindeks + peringatan shallow clone.
+  // Repo tanpa git: dilewati diam-diam (bukan error).
+  try {
+    const db = openDb(repoRoot);
+    try {
+      let n = 0;
+      try {
+        n = (db.prepare(`SELECT COUNT(*) AS n FROM commits`).get() as { n: number }).n;
+      } catch {
+        n = 0;
+      }
+      const { isShallowRepo } = await import("../retrieval/history/extractor.js");
+      let shallow = false;
+      try {
+        shallow = isShallowRepo(repoRoot);
+      } catch {
+        shallow = false;
+      }
+      if (n > 0) console.log(`i History: ${n} commit terindeks`);
+      else console.log(`i History: belum terindeks (jalankan \`scopecairn scan\`)`);
+      if (shallow) console.log(`! Clone dangkal terdeteksi — riwayat parsial, analog bisa tak lengkap.`);
+    } finally {
+      db.close();
+    }
+  } catch (err) {
+    logError("doctor", err, repoRoot);
+    if (opts?.verbose) console.error(err);
+  }
+
   const protPath = path.join(dataDir(repoRoot), "protected.yml");
   console.log(`${tick(fs.existsSync(protPath))} Protected ${protPath}`);
 
-  // CALLS_API: edge klienΓåÆroute + route yang tidak ditemukan klien.
+  // CALLS_API: edge klien→route + route yang tidak ditemukan klien.
   try {
     const db = openDb(repoRoot);
     try {
@@ -108,9 +137,9 @@ export async function cmdDoctor(repoRoot: string, opts?: { verbose?: boolean }):
         .all() as { name: string; file: string }[];
       if (orphans.length > 0) {
         console.log(`i Route tidak ditemukan klien (${orphans.length} ditampilkan, maks 10):`);
-        for (const o of orphans) console.log(`  ~ ${o.name} ΓÇö ${o.file}`);
+        for (const o of orphans) console.log(`  ~ ${o.name} — ${o.file}`);
       } else if (n > 0) {
-        console.log(`Γ£ô Semua route punya klien CALLS_API`);
+        console.log(`✓ Semua route punya klien CALLS_API`);
       }
     } finally {
       db.close();

@@ -11,7 +11,8 @@ export function computeScope(
   highFiles: string[],
   mediumFiles: string[],
   testFiles: string[],
-  patterns: string[]
+  patterns: string[],
+  historyOptional?: string[]
 ): TaskScope {
   const required: string[] = [];
   const optional: string[] = [];
@@ -34,6 +35,14 @@ export function computeScope(
     seen.add(t);
     if (isProtected(t, patterns)) protectedFiles.push(t);
     else optional.push(t);
+  }
+  // Co-change riwayat: tak pernah Required (precision Required terjaga),
+  // non-Protected dipromosikan ke Optional.
+  for (const h of historyOptional ?? []) {
+    if (seen.has(h)) continue;
+    seen.add(h);
+    if (isProtected(h, patterns)) protectedFiles.push(h);
+    else optional.push(h);
   }
 
   return { required, optional, protected: protectedFiles };

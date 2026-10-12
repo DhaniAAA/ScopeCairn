@@ -17,9 +17,10 @@ export const DEFINITION_OF_DONE = [
   "Index dimutakhirkan (`scopecairn scan`)",
 ] as const;
 
-export function guardBlock(): string {
+export function guardBlock(extraDoD?: string[]): string {
+  const dod = [...DEFINITION_OF_DONE, ...(extraDoD ?? [])];
   return (
     `## Task Guard\n${TASK_GUARD_RULES.map((r) => `- ${r}`).join("\n")}\n\n` +
-    `## Definition of Done\n${DEFINITION_OF_DONE.map((d) => `- [ ] ${d}`).join("\n")}\n`
+    `## Definition of Done\n${dod.map((d) => `- [ ] ${d}`).join("\n")}\n`
   );
 }

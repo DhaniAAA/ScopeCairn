@@ -1,9 +1,10 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { RetrievalResult } from "./retrieve.js";
 import type { Classification } from "./classify.js";
-import { loadProtectedPatterns } from "../scope/protected.js";
+import { loadProtectedPatterns, isProtected } from "../scope/protected.js";
 import { computeScope, scopeBlock } from "../scope/scope.js";
 import { guardBlock } from "../scope/guard.js";
+import { coChangeSet, groupHistoryFiles, type HistoryAnalog } from "./history/search.js";
 
 // Context Builder (PRD FR-06): Markdown ringkas untuk agent.
 // Prioritas §14: buang tak-relevan → dedup → level simbol → ringkas → source on-demand.
@@ -16,12 +17,18 @@ export interface BuiltContext {
   dependencies: string[];
 }
 
+export interface HistoryBlock {
+  analogs: HistoryAnalog[];
+  /** Statistik diff per sha pendek (hanya bila --with-diff). */
+  diffStats?: Map<string, string>;
+}
+
 export function buildContext(
   db: DatabaseSync,
   task: string,
   result: RetrievalResult,
   cls: Classification,
-  opts?: { escalate?: boolean; repoRoot?: string }
+  opts?: { escalate?: boolean; repoRoot?: string; history?: HistoryBlock; withDiff?: boolean }
 ): BuiltContext {
   const complex = cls.complexity === "COMPLEX" || opts?.escalate === true;
 
@@ -211,12 +218,47 @@ export function buildContext(
   }
 
   // Task Scope nyata (FR-07): Required/Optional/Protected dari pola path.
-  const scope = computeScope(
-    highFiles,
-    medFiles,
-    tests,
-    loadProtectedPatterns(opts?.repoRoot ?? ".")
-  );
+  // Co-change riwayat hanya menambah Optional (tak pernah Required).
+  const historyAnalogs = opts?.history?.analogs ?? [];
+  const cochange = coChangeSet(historyAnalogs);
+  const patterns = loadProtectedPatterns(opts?.repoRoot ?? ".");
+  const historyOptional = cochange
+    .map((c) => c.path)
+    .filter((f) => !isProtected(f, patterns));
+  const scope = computeScope(highFiles, medFiles, tests, patterns, historyOptional);
+
+  // Bagian Analogi riwayat (disembunyikan bila tak ada analog lolos ambang).
+  let historyBlock = "";
+  if (historyAnalogs.length > 0) {
+    const lines: string[] = [`## Analogi riwayat`, ``];
+    for (const a of historyAnalogs) {
+      const g = groupHistoryFiles(a.files);
+      lines.push(`- \`${a.shortSha}\` ${a.date} — ${a.subject}`);
+      if (g.source.length > 0) lines.push(`  source: ${g.source.join(", ")}`);
+      if (g.test.length > 0) lines.push(`  test: ${g.test.join(", ")}`);
+      if (g.config.length > 0) lines.push(`  config: ${g.config.join(", ")}`);
+      if (g.docs.length > 0) lines.push(`  docs: ${g.docs.join(", ")}`);
+      const stat = opts?.history?.diffStats?.get(a.shortSha);
+      if (stat) lines.push(`  diff: ${stat}`);
+    }
+    if (cochange.length > 0) {
+      lines.push(
+        ``,
+        `Co-change (ikut berubah di ≥2 analog): ` +
+          cochange.map((c) => `${c.path} (${c.count}x)`).join(", ")
+      );
+    }
+    lines.push(``);
+    historyBlock = lines.join("\n") + "\n";
+  }
+
+  // DoD tambahan bila analog membawa test sementara Required belum punya test.
+  const extraDoD: string[] = [];
+  const requiredHasTest = scope.required.some((f) => isTestFileLike(f));
+  const analogTestSha = historyAnalogs.find((a) => groupHistoryFiles(a.files).test.length > 0);
+  if (analogTestSha && !requiredHasTest) {
+    extraDoD.push(`ubah atau tambah test, seperti pada \`${analogTestSha.shortSha}\``);
+  }
 
   const md =
     `# Task Context\n\n## Task\n${task}\n\n` +
@@ -229,10 +271,11 @@ export function buildContext(
       : ``) +
     `## Dependencies\n${deps.map((d) => `- ${d}`).join("\n") || "-"}\n\n` +
     `## Related Tests\n${tests.map((t) => `- ${t}`).join("\n") || "-"}\n\n` +
+    historyBlock +
     cycleWarn +
     scopeBlock(scope) +
     `\n` +
-    guardBlock();
+    guardBlock(extraDoD.length > 0 ? extraDoD : undefined);
 
   return { markdown: md, high: highFiles, medium: medFiles, tests, dependencies: deps };
 }

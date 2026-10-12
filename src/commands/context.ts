@@ -14,6 +14,8 @@ export interface ContextOptions {
   noRefresh?: boolean;
   mode?: "NORMAL" | "FAST" | "SAFE" | "AUDIT";
   maxTokens?: number;
+  noHistory?: boolean;
+  withDiff?: boolean;
 }
 
 // Entry point utama agent (PRD §8.4): satu perintah, ScopeCairn yang
@@ -117,9 +119,43 @@ export async function cmdContext(
 
     const decisions = loadDecisions(repoRoot);
 
+    // Analogi riwayat: aktif default pada COMPLEX, dilewati bila --no-history
+    // atau mode FAST. Gagal lembut (repo tanpa git) → seksi disembunyikan.
+    // (Commander memetakan --no-history ke { history: false }; terima dua bentuk.)
+    const skipHistory =
+      opts.noHistory === true || (opts as { history?: boolean }).history === false;
+    let historyAnalogs: import("../retrieval/history/search.js").HistoryAnalog[] = [];
+    const diffStats = new Map<string, string>();
+    if (!skipHistory && effectiveMode !== "FAST") {
+      try {
+        const { historySearch } = await import("../retrieval/history/search.js");
+        const seedFiles = [...new Set(result.ranked.filter((r) => r.score >= 0.15).map((r) => r.file))].slice(0, 20);
+        historyAnalogs = historySearch(db, task, { seedFiles, limit: 3 });
+        if (opts.withDiff) {
+          const { execFileSync } = await import("node:child_process");
+          for (const a of historyAnalogs) {
+            try {
+              const out = execFileSync("git", ["show", "--stat", "--oneline", a.sha], {
+                cwd: repoRoot,
+                encoding: "utf8",
+                timeout: 8000,
+                stdio: ["ignore", "pipe", "ignore"],
+              });
+              diffStats.set(a.shortSha, out.split("\n").filter(Boolean).slice(0, 12).join(" | ").slice(0, 500));
+            } catch {
+              // abaikan per analog
+            }
+          }
+        }
+      } catch {
+        historyAnalogs = [];
+      }
+    }
+
     const built = buildContext(db, task, result, cls, {
       escalate,
       repoRoot,
+      history: historyAnalogs.length > 0 ? { analogs: historyAnalogs, diffStats } : undefined,
     });
     let out = built.markdown;
     if (effectiveMode !== "NORMAL") {
@@ -131,7 +167,7 @@ export async function cmdContext(
     const maxTokens = opts.maxTokens;
     if (maxTokens && maxTokens > 0 && Math.ceil(out.length / 4) > maxTokens) {
       const parts = out.split(/\n(?=## )/);
-      for (const sec of ["Critical hotspots", "Circular dependency warning", "Dependencies", "Related Tests"]) {
+      for (const sec of ["Analogi riwayat", "Critical hotspots", "Circular dependency warning", "Dependencies", "Related Tests"]) {
         if (Math.ceil(parts.join("\n").length / 4) <= maxTokens) break;
         const i = parts.findIndex((p) => p.startsWith(`## ${sec}`));
         if (i >= 0) parts.splice(i, 1);

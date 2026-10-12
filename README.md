@@ -149,7 +149,8 @@ scopecairn agents list
 | `init [path]` | Initial indexing + Skill, Workflow, detected agent skills (`--agents …\|all`; never writes `AGENTS.md`) |
 | `scan` / `rebuild` / `clean` | Manual index management (`scan` incremental; `rebuild` from scratch; `clean` removes `.scopecairn/`) |
 | `status` / `doctor` | Index status (incl. adapters, invocations) and health checks |
-| `context "<task>"` | Main entry point: context + scope (`--escalate`, `--no-refresh`, `--mode NORMAL|FAST|SAFE|AUDIT`, `--max-tokens N`); a path task returns an orientation map |
+| `context "<task>"` | Main entry point: context + scope (`--escalate`, `--no-refresh`, `--mode NORMAL|FAST|SAFE|AUDIT`, `--max-tokens N`, `--no-history`, `--with-diff`); a path task returns an orientation map |
+| `history "<task>" [--limit N] [--json] [--with-diff]` | Analog commit lama paling mirip (BM25 + recency half-life 180 hari + co-change); co-change set ikut ke Optional di `context` |
 | `impact <path\|symbol>` | Change impact: direct, indirect, tests (via TESTS edges + static CALLS backward reachability), UI, queries, routes. Edge evidence tagged EXTRACTED/INFERRED/AMBIGUOUS |
 | `graph <symbol>` | Symbol relations (+ PageRank, community, cycle status) |
 | `path <from> <to>` | Shortest multi-hop call/dependency path between two symbols |
@@ -204,6 +205,16 @@ prompt → scopecairn context (refresh at start) → agent edits code
 ```
 
 Measure retrieval quality anytime: `scopecairn benchmark [--tune]`.
+
+## History privacy
+
+`scan` mengindeks pesan commit git lokal ke tabel `commits`/`commit_files` di
+`.scopecairn/scopecairn.db` (dilewati commit >40 file, lockfile, dan generated).
+Isi commit **tidak** masuk `GRAPH.md`/`GRAPH.html`/`export` (sering di-commit dan
+dibagikan) — riwayat hanya hidup di database lokal dan output `context`/`history`.
+Pesan commit bisa memuat info sensitif; karena tidak keluar dari mesin, risikonya
+kecil. Repo tanpa git atau clone dangkal tetap didukung (riwayat parsial/absen,
+dilaporkan `doctor`).
 
 ## License
 

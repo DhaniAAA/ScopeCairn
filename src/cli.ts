@@ -10,6 +10,7 @@ import { cmdPath } from "./commands/path.js";
 import { cmdExport } from "./commands/export.js";
 import { cmdRead } from "./commands/read.js";
 import { cmdContext } from "./commands/context.js";
+import { cmdHistory } from "./commands/history.js";
 import { cmdImpact } from "./commands/impact.js";
 import { cmdInit } from "./commands/init.js";
 import { cmdBenchmark } from "./commands/benchmark.js";
@@ -163,8 +164,21 @@ program
   .option("--no-refresh", "skip incremental refresh (debugging/benchmark)")
   .option("--mode <mode>", "agent mode: NORMAL|FAST|SAFE|AUDIT", "NORMAL")
   .option("--max-tokens <n>", "potong konteks agar estimasi muat N token (≈ char/4)", parseInt)
-  .action((task: string, opts: { escalate?: boolean; noRefresh?: boolean; mode?: "NORMAL" | "FAST" | "SAFE" | "AUDIT"; maxTokens?: number }) =>
+  .option("--no-history", "lewati bagian Analogi riwayat")
+  .option("--with-diff", "tambahkan ringkasan diff pada Analogi riwayat")
+  .action((task: string, opts: { escalate?: boolean; noRefresh?: boolean; mode?: "NORMAL" | "FAST" | "SAFE" | "AUDIT"; maxTokens?: number; noHistory?: boolean; withDiff?: boolean }) =>
     cmdContext(repoRoot(), task, opts)
+  );
+
+program
+  .command("history <task>")
+  .description("Analog commit lama yang paling mirip dengan task (BM25 + recency + co-change)")
+  .option("--limit <n>", "jumlah analog (default 3, maks 10)", parseInt)
+  .option("--json", "output results as JSON")
+  .option("--no-refresh", "skip incremental refresh (debugging/benchmark)")
+  .option("--with-diff", "tambahkan ringkasan diff per analog")
+  .action((task: string, opts: { limit?: number; json?: boolean; noRefresh?: boolean; withDiff?: boolean }) =>
+    cmdHistory(repoRoot(), task, opts)
   );
 
 program

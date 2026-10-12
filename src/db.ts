@@ -14,7 +14,7 @@ function loadDatabaseSync(): typeof DatabaseSyncType {
 
 export const DATA_DIR_NAME = ".scopecairn";
 export const DB_FILE_NAME = "scopecairn.db";
-export const SCHEMA_VERSION = 6;
+export const SCHEMA_VERSION = 7;
 
 export function dataDir(repoRoot: string): string {
   return path.join(repoRoot, DATA_DIR_NAME);
@@ -117,6 +117,29 @@ export function openDb(repoRoot: string): DatabaseSyncType {
       length INTEGER NOT NULL DEFAULT 0,
       nodes_json TEXT NOT NULL DEFAULT '[]',
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    -- Analogi riwayat: commit git lokal untuk history search (hanya di DB
+    -- lokal .scopecairn/, tidak pernah masuk GRAPH.md/export).
+    CREATE TABLE IF NOT EXISTS commits (
+      sha TEXT PRIMARY KEY,
+      ts INTEGER NOT NULL DEFAULT 0,
+      subject TEXT NOT NULL DEFAULT '',
+      body TEXT NOT NULL DEFAULT '',
+      author TEXT NOT NULL DEFAULT ''
+    );
+    CREATE INDEX IF NOT EXISTS idx_commits_ts ON commits(ts);
+    CREATE TABLE IF NOT EXISTS commit_files (
+      sha TEXT NOT NULL REFERENCES commits(sha) ON DELETE CASCADE,
+      path TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'M',
+      old_path TEXT,
+      additions INTEGER NOT NULL DEFAULT 0,
+      deletions INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS idx_commit_files_sha ON commit_files(sha);
+    CREATE INDEX IF NOT EXISTS idx_commit_files_path ON commit_files(path);
+    CREATE VIRTUAL TABLE IF NOT EXISTS commit_fts USING fts5(
+      sha UNINDEXED, subject, body, paths
     );
   `);
   db.prepare(

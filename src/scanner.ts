@@ -10,6 +10,9 @@ import { cleanupIndex } from "./retrieval/symbolIndex.js";
 import { ensureDefaultFiles } from "./retrieval/config.js";
 import { isIndexableMetaFile, loadProtectedPatterns } from "./scope/protected.js";
 import { runAdapters } from "./adapters/index.js";
+import { ensureHistoryIndex } from "./retrieval/history/extractor.js";
+import { syncCommitFts } from "./retrieval/history/index.js";
+import { logError } from "./log.js";
 import { writeGraphMdIfChanged } from "./graph/export.js";
 import { buildVisualModel, renderHtml, GRAPH_HTML_NAME } from "./graph/visual.js";
 import { writeArchaeologyIfAbsent } from "./archaeology.js";
@@ -197,6 +200,21 @@ export async function scanRepository(repoRoot: string): Promise<ScanStats> {
 
     linkTests(db);
     cleanupIndex(db);
+
+    // Analogi riwayat: indeks git inkremental (best-effort; repo tanpa git
+    // atau clone dangkal tetap sukses, hanya dilaporkan di doctor).
+    try {
+      const hist = ensureHistoryIndex(db, repoRoot);
+      if (hist.available && hist.shas.length > 0) {
+        try {
+          syncCommitFts(db, hist.shas);
+        } catch (err) {
+          logError("history", err, repoRoot);
+        }
+      }
+    } catch (err) {
+      logError("history", err, repoRoot);
+    }
 
     // GRAPH.md: tulis ulang hanya bila graph berubah (file berubah atau
     // adapter menambah simbol/relasi). Tanpa perubahan → file tak tersentuh.

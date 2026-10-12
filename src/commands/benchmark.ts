@@ -1,6 +1,7 @@
 import { openDb } from "../db.js";
 import { refreshIndex } from "../refresh.js";
 import { runBenchmark, tuneWeights } from "../benchmark/run.js";
+import { runHistoryBenchmark } from "../benchmark/history.js";
 import { benchmarkReport } from "../benchmark/report.js";
 import { gitSignals } from "../retrieval/git.js";
 
@@ -24,6 +25,21 @@ export async function cmdBenchmark(
     const summary = runBenchmark(db, repoRoot);
     const tune = opts.tune ? tuneWeights(db, repoRoot) : null;
     console.log(benchmarkReport(summary, tune, git.available));
+    // Leave-one-out riwayat: recall/precision promosi co-change (aditif).
+    try {
+      const hist = runHistoryBenchmark(db);
+      if (hist.commits > 0) {
+        console.log(
+          `\nHistory leave-one-out: ${hist.commits} commits, ` +
+            `recall ${hist.avgRecall.toFixed(2)}, precision ${hist.avgPrecision.toFixed(2)} ` +
+            `(${hist.promotedTotal} file dipromosikan)`
+        );
+      } else {
+        console.log(`\nHistory leave-one-out: riwayat kosong (jalankan \`scopecairn scan\` di repo git).`);
+      }
+    } catch {
+      // best-effort
+    }
   } finally {
     db.close();
   }

@@ -15,6 +15,7 @@ import {
 import { vueAdapter } from "./vue.js";
 import { nestjsAdapter } from "./nestjs.js";
 import { djangoAdapter } from "./django.js";
+import { apiCallsRelevant, deriveApiCalls } from "./apiCalls.js";
 import { syncFileIndex } from "../retrieval/symbolIndex.js";
 import { logError } from "../log.js";
 
@@ -151,6 +152,53 @@ export function runAdapters(
     } catch (err) {
       logError("adapters", err, repoRoot);
     }
+  }
+  // CALLS_API lintas batas: post-pass atas SEMUA file JS/TS, seperti QUERIES.
+  // Route baru langsung me-resolve call yang tertunda tanpa rebuild.
+  try {
+    const all = db.prepare(`SELECT id, path FROM files`).all() as { id: number; path: string }[];
+    const hasClient = all.some((r) => apiCallsRelevant(r.path));
+    if (hasClient) {
+      const delApi = db.prepare(
+        `DELETE FROM relationships WHERE relationship_type = 'CALLS_API' AND source_id IN (SELECT id FROM symbols WHERE file_id = ?)`
+      );
+      const insApi = db.prepare(
+        `INSERT INTO relationships(source_id, target_id, relationship_type, weight, confidence, evidence)
+         VALUES (?, ?, 'CALLS_API', ?, ?, ?)`
+      );
+      for (const r of all) {
+        if (!apiCallsRelevant(r.path)) continue;
+        let content: string;
+        try {
+          content = fs.readFileSync(path.join(repoRoot, ...r.path.split("/")), "utf8");
+        } catch {
+          continue;
+        }
+        try {
+          delApi.run(r.id);
+        } catch (err) {
+          logError("adapters", err, repoRoot);
+          continue;
+        }
+        let edges: ReturnType<typeof deriveApiCalls>;
+        try {
+          edges = deriveApiCalls(db, r.id, content, r.path);
+        } catch (err) {
+          logError("adapters", err, repoRoot);
+          continue;
+        }
+        for (const e of edges) {
+          try {
+            insApi.run(e.callerId, e.targetId, e.weight, e.confidence, e.evidence);
+            relations++;
+          } catch (err) {
+            logError("adapters", err, repoRoot);
+          }
+        }
+      }
+    }
+  } catch (err) {
+    logError("adapters", err, repoRoot);
   }
   // Jaring pengaman: buang edge/metrik yang menunjuk simbol hilang.
   try {

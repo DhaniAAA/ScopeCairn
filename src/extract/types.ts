@@ -27,7 +27,8 @@ export type RelationType =
   | "USES"
   | "TESTS"
   | "ROUTES_TO"
-  | "QUERIES";
+  | "QUERIES"
+  | "CALLS_API";
 
 export interface ExtractedSymbol {
   name: string;
@@ -72,6 +73,11 @@ export function evidenceOf(
   confidence: number,
   methodCall?: boolean
 ): EdgeEvidence {
+  if (rel === "CALLS_API") {
+    if (confidence >= 1) return "EXTRACTED";
+    if (confidence >= 0.5) return "INFERRED";
+    return "AMBIGUOUS";
+  }
   if (methodCall) return "AMBIGUOUS";
   if (rel === "QUERIES" || rel === "ROUTES_TO" || rel === "TESTS") return "INFERRED";
   if (rel === "USES" || rel === "REFERENCES") return "AMBIGUOUS";
@@ -89,6 +95,7 @@ export const WEIGHT: Record<RelationType, number> = {
   EXTENDS: 0.8,
   IMPLEMENTS: 0.8,
   QUERIES: 0.8,
+  CALLS_API: 0.8,
   CALLS: 0.7,
   REFERENCES: 0.5,
   USES: 0.5,

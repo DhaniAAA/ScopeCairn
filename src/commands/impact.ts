@@ -84,7 +84,7 @@ export async function cmdImpact(
         if (out.length >= 15) break;
       }
       // File-level: CALLS/QUERIES hidup di simbol — agregatkan dari simbol file ini.
-      if (out.length === 0 && fileHit != null && (rel === "CALLS" || rel === "USES" || rel === "QUERIES")) {
+      if (out.length === 0 && fileHit != null && (rel === "CALLS" || rel === "USES" || rel === "QUERIES" || rel === "CALLS_API")) {
         try {
           const rows = db
             .prepare(
@@ -197,6 +197,59 @@ export async function cmdImpact(
       ]),
     ].slice(0, 10);
 
+    // Klien terpengaruh (CALLS_API masuk): enclosing symbol pemanggil + komponen
+    // UI 1 hop ke atas via CALLS/IMPORTS.
+    const apiClients = direct.filter((e) => e.rel === "CALLS_API" && e.direction === "in");
+    const apiClientLabels = [
+      ...new Set(
+        apiClients.map((e) =>
+          e.other.type === "file" ? e.other.file : `${e.other.name} (${withLine(e.other.file, e.other.id)})`
+        )
+      ),
+    ].slice(0, 10);
+    if (apiClientLabels.length === 0 && fileHit != null) {
+      try {
+        const rows = db
+          .prepare(
+            `SELECT DISTINCT s.name AS n, f.path AS p, s.id AS sid
+             FROM relationships r
+             JOIN symbols s ON s.id = r.source_id
+             JOIN files f ON f.id = s.file_id
+             JOIN symbols t ON t.id = r.target_id
+             WHERE t.file_id = (SELECT file_id FROM symbols WHERE id = ?)
+               AND r.relationship_type = 'CALLS_API' AND s.type != 'file'
+             LIMIT 8`
+          )
+          .all(center.id) as { n: string; p: string; sid: number }[];
+        for (const r of rows) {
+          const label = `${r.n} (${r.p}:${lineOf(r.sid)})`;
+          if (!apiClientLabels.includes(label)) apiClientLabels.push(label);
+        }
+      } catch {
+        // ignore
+      }
+    }
+    const apiClientUi: string[] = [];
+    try {
+      const seenUi = new Set<string>();
+      for (const c of apiClients.slice(0, 10)) {
+        const up = neighbors(db, c.other.id, 20).filter(
+          (e) => e.direction === "in" && (e.rel === "CALLS" || e.rel === "IMPORTS") && e.other.type === "component"
+        );
+        for (const u of up) {
+          const label = `${u.other.name} (${u.other.file})`;
+          if (!seenUi.has(label)) {
+            seenUi.add(label);
+            apiClientUi.push(label);
+          }
+          if (apiClientUi.length >= 10) break;
+        }
+        if (apiClientUi.length >= 10) break;
+      }
+    } catch {
+      // ignore
+    }
+
     // Tingkat risiko: protected / cycle / fan-in / sebaran file. Aditif, tanpa
     // mengubah seksi lama agar konsumen CLI lama tidak pecah.
     const reasons: string[] = [];
@@ -247,6 +300,8 @@ export async function cmdImpact(
       `Mengquery: ${byRel("QUERIES", "out").join(", ") || "-"}`,
       `Diquery oleh: ${byRel("QUERIES", "in").join(", ") || "-"}`,
       `Rute: ${[...byRel("ROUTES_TO", "out"), ...byRel("ROUTES_TO", "in")].join(", ") || "-"}`,
+      `API keluar: ${byRel("CALLS_API", "out").join(", ") || "-"}`,
+      `API masuk: ${byRel("CALLS_API", "in").join(", ") || "-"}`,
       ``,
       `## Indirect (${indirect.size})`,
       ...[...indirect.values()]
@@ -265,6 +320,11 @@ export async function cmdImpact(
       `## UI Components`,
       ...ui.map((u) => `- ${u}`),
       ...(ui.length === 0 ? ["- (tidak ada)"] : []),
+      ``,
+      `## Klien terpengaruh (CALLS_API)`,
+      ...apiClientLabels.map((c) => `- ${c}`),
+      ...(apiClientUi.length > 0 ? apiClientUi.map((u) => `- ${u} (via CALLS/IMPORTS 1 hop)`) : []),
+      ...(apiClientLabels.length === 0 ? ["- (tidak ada klien CALLS_API)"] : []),
       ``,
       `## Endpoints`,
       ...endpoints.map((e) => `- ${e}`),

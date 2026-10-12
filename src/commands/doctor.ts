@@ -92,6 +92,34 @@ export async function cmdDoctor(repoRoot: string, opts?: { verbose?: boolean }):
   const protPath = path.join(dataDir(repoRoot), "protected.yml");
   console.log(`${tick(fs.existsSync(protPath))} Protected ${protPath}`);
 
+  // CALLS_API: edge klienΓåÆroute + route yang tidak ditemukan klien.
+  try {
+    const db = openDb(repoRoot);
+    try {
+      const n = (db.prepare(`SELECT COUNT(*) AS n FROM relationships WHERE relationship_type = 'CALLS_API'`).get() as { n: number }).n;
+      console.log(`i CALLS_API edges: ${n}`);
+      const orphans = db
+        .prepare(
+          `SELECT s.name AS name, f.path AS file FROM symbols s
+           JOIN files f ON f.id = s.file_id
+           WHERE s.type = 'route' AND s.id NOT IN (SELECT target_id FROM relationships WHERE relationship_type = 'CALLS_API')
+           LIMIT 10`
+        )
+        .all() as { name: string; file: string }[];
+      if (orphans.length > 0) {
+        console.log(`i Route tidak ditemukan klien (${orphans.length} ditampilkan, maks 10):`);
+        for (const o of orphans) console.log(`  ~ ${o.name} ΓÇö ${o.file}`);
+      } else if (n > 0) {
+        console.log(`Γ£ô Semua route punya klien CALLS_API`);
+      }
+    } finally {
+      db.close();
+    }
+  } catch (err) {
+    logError("doctor", err, repoRoot);
+    if (opts?.verbose) console.error(err);
+  }
+
   // AI-3: file integrasi di lokasi yang benar + prefix konsisten (AI-9).
   // mode=new (skill/command milik penuh): keberadaan file = terpasang.
   // mode=merge (aturan menumpang file user): wajib ada marker.

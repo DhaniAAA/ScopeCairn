@@ -9,6 +9,7 @@ import { parseSqlAlchemyModels, parseSqlAlchemyQueries } from "../src/adapters/s
 import { parsePrismaModels } from "../src/adapters/prisma.js";
 import { usedVueComponents, vueComponentName, parseVueImports, parseTemplateTags, hasVueDefineComponent } from "../src/adapters/vue.js";
 import { nextjsAdapter, detectServerActions, detectMiddleware, routeHandlers, prismaCalls } from "../src/adapters/nextjs.js";
+import { normalizeApiPath, parseApiCalls, parseRouteName, deriveApiCalls } from "../src/adapters/apiCalls.js";
 
 await prepareTreeSitter(["typescript", "tsx", "javascript", "python", "vue"]);
 
@@ -160,6 +161,68 @@ CREATE TABLE relationships (source_id INTEGER, target_id INTEGER, relationship_t
     const queries = db.prepare("SELECT COUNT(*) AS count FROM relationships WHERE relationship_type = 'QUERIES'").get() as { count: number };
     assert.deepEqual(models.map((model) => model.name), ["users"]);
     assert.equal(queries.count, 2);
+  } finally {
+    db.close();
+  }
+});
+
+test("calls_api normalizer menyamakan template dan route dinamis", () => {
+  assert.equal(normalizeApiPath("/api/users/${id}"), "/api/users/{}");
+  assert.equal(normalizeApiPath("/api/users/[id]"), "/api/users/{}");
+  assert.equal(normalizeApiPath("/api/users/:id"), "/api/users/{}");
+  assert.equal(normalizeApiPath("/api/users/<int:id>/"), "/api/users/{}");
+  assert.equal(normalizeApiPath("https://x.test/api/health?x=1#h"), "/api/health");
+  assert.equal(normalizeApiPath("api/users"), "/api/users");
+  assert.deepEqual(parseRouteName("GET /api/users/[id]"), { method: "GET", path: "/api/users/[id]" });
+  assert.deepEqual(parseRouteName("ROUTE /path/"), { method: null, path: "/path/" });
+});
+
+test("calls_api detector: fetch literal, template, axios.post, skip dinamis dan Map.get", async () => {
+  await prepareTreeSitter(["typescript"]);
+  const calls = parseApiCalls(
+    `fetch('/api/health');\nfetch(\`/api/users/\${id}\`);\naxios.post('/api/orders', body);\nconst m = new Map(); m.get("key");\nfetch(url);`,
+    "typescript"
+  );
+  const raws = calls.map((c) => c.raw).sort();
+  assert.ok(raws.includes("/api/health"));
+  assert.ok(raws.includes("/api/users/${id}"));
+  assert.ok(raws.includes("/api/orders"));
+  assert.ok(!raws.includes("key"));
+  assert.ok(!raws.includes("url"));
+  const post = calls.find((c) => c.raw === "/api/orders");
+  assert.equal(post?.method, "POST");
+});
+
+test("calls_api resolver: INFERRED template, EXTRACTED literal, AMBIGUOUS cap 3", async () => {
+  await prepareTreeSitter(["typescript", "tsx"]);
+  const db = new DatabaseSync(":memory:");
+  try {
+    db.exec(`CREATE TABLE files (id INTEGER PRIMARY KEY, path TEXT, language TEXT, hash TEXT, size INTEGER);
+CREATE TABLE symbols (id INTEGER PRIMARY KEY, file_id INTEGER, name TEXT, type TEXT, signature TEXT, start_line INTEGER, end_line INTEGER);
+CREATE TABLE relationships (source_id INTEGER, target_id INTEGER, relationship_type TEXT, weight REAL, confidence REAL, evidence TEXT);`);
+    db.prepare("INSERT INTO files (id, path, language, hash, size) VALUES (1, 'app/api/users/[id]/route.ts', 'typescript', 'h', 1)").run();
+    db.prepare("INSERT INTO files (id, path, language, hash, size) VALUES (2, 'web/UserCard.tsx', 'typescript', 'h', 1)").run();
+    db.prepare("INSERT INTO symbols (id, file_id, name, type, signature, start_line, end_line) VALUES (10, 1, 'app/api/users/[id]/route.ts', 'file', '', 1, 1)").run();
+    db.prepare("INSERT INTO symbols (id, file_id, name, type, signature, start_line, end_line) VALUES (11, 1, 'GET /api/users/[id]', 'route', 'GET /api/users/[id]', 1, 1)").run();
+    db.prepare("INSERT INTO symbols (id, file_id, name, type, signature, start_line, end_line) VALUES (12, 1, 'GET /api/health', 'route', 'GET /api/health', 1, 1)").run();
+    db.prepare("INSERT INTO symbols (id, file_id, name, type, signature, start_line, end_line) VALUES (20, 2, 'web/UserCard.tsx', 'file', '', 1, 1)").run();
+    db.prepare("INSERT INTO symbols (id, file_id, name, type, signature, start_line, end_line) VALUES (21, 2, 'UserCard', 'component', '', 1, 10)").run();
+    const inf = deriveApiCalls(db, 2, `export function UserCard(){ fetch(\`/api/users/\${id}\`); }`, "web/UserCard.tsx");
+    assert.equal(inf.length, 1);
+    assert.equal(inf[0].evidence, "INFERRED");
+    assert.equal(inf[0].callerId, 21);
+    assert.equal(inf[0].targetId, 11);
+    const ext = deriveApiCalls(db, 2, `export function UserCard(){ fetch('/api/health'); }`, "web/UserCard.tsx");
+    assert.equal(ext.length, 1);
+    assert.equal(ext[0].evidence, "EXTRACTED");
+    // Dua kandidat method sama path → maksimal 3 AMBIGUOUS
+    db.prepare("INSERT INTO symbols (id, file_id, name, type, signature, start_line, end_line) VALUES (13, 1, 'POST /api/users/[id]', 'route', 'POST /api/users/[id]', 1, 1)").run();
+    db.prepare("INSERT INTO symbols (id, file_id, name, type, signature, start_line, end_line) VALUES (14, 1, 'PUT /api/users/[id]', 'route', 'PUT /api/users/[id]', 1, 1)").run();
+    db.prepare("INSERT INTO symbols (id, file_id, name, type, signature, start_line, end_line) VALUES (15, 1, 'PATCH /api/users/[id]', 'route', 'PATCH /api/users/[id]', 1, 1)").run();
+    db.prepare("INSERT INTO symbols (id, file_id, name, type, signature, start_line, end_line) VALUES (16, 1, 'DELETE /api/users/[id]', 'route', 'DELETE /api/users/[id]', 1, 1)").run();
+    const amb = deriveApiCalls(db, 2, `export function UserCard(){ fetch('/api/users/123', { method: 'POST' }); }`, "web/UserCard.tsx");
+    assert.ok(amb.length >= 1 && amb.length <= 3);
+    assert.ok(amb.every((e) => e.evidence === "AMBIGUOUS" || e.evidence === "EXTRACTED" || e.evidence === "INFERRED"));
   } finally {
     db.close();
   }

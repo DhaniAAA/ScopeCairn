@@ -112,6 +112,41 @@ export async function runVerify(
         involvesChangedFiles: involvesChanged,
       });
     }
+
+    // 3. CALLS_API: route yang diubah tapi kliennya tak ada di daftar Required.
+    try {
+      const hasCallsApi = (
+        db.prepare(`SELECT COUNT(*) AS n FROM relationships WHERE relationship_type = 'CALLS_API'`).get() as { n: number }
+      ).n;
+      if (hasCallsApi > 0 && changed.length > 0) {
+        const ph = changed.map(() => "?").join(",");
+        const changedRoutes = db
+          .prepare(
+            `SELECT s.id AS id, s.name AS name FROM symbols s
+             JOIN files f ON f.id = s.file_id
+             WHERE s.type = 'route' AND f.path IN (${ph})`
+          )
+          .all(...changed) as { id: number; name: string }[];
+        for (const r of changedRoutes.slice(0, 20)) {
+          const clients = db
+            .prepare(
+              `SELECT DISTINCT f.path AS p FROM relationships rel
+               JOIN symbols s ON s.id = rel.source_id
+               JOIN files f ON f.id = s.file_id
+               WHERE rel.target_id = ? AND rel.relationship_type = 'CALLS_API' LIMIT 10`
+            )
+            .all(r.id) as { p: string }[];
+          const outside = clients
+            .map((c) => c.p.replace(/\\/g, "/"))
+            .filter((p) => !changedSet.has(p));
+          for (const p of outside.slice(0, 5)) {
+            warnings.push(`route ${r.name} punya klien ${p} yang tidak ada di daftar Required`);
+          }
+        }
+      }
+    } catch {
+      // skema lama — abaikan
+    }
   } finally {
     db.close();
   }
@@ -194,6 +229,13 @@ export async function cmdVerify(
   if (result.cycles.length > newCycles.length) {
     const existing = result.cycles.filter((c) => !c.involvesChangedFiles);
     console.log(`\n(!) Notice: ${existing.length} pre-existing cycles exist in repo.`);
+  }
+
+  if (result.warnings.length > 0) {
+    console.log(`\n[!] API clients (CALLS_API):`);
+    for (const w of result.warnings.slice(0, 10)) {
+      console.log(`      • ${w}`);
+    }
   }
 
   console.log("");

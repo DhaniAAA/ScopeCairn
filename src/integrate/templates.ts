@@ -126,14 +126,62 @@ Run \`${prefix} context "$ARGUMENTS"\` with the bash tool, then:
 // otomatis: opencode.json adalah JSONC (boleh berkomentar) dan milik user —
 // merge otomatis berisiko merusak konfigurasi yang ada.
 export function opencodePermissionGuide(prefix: string): string {
-  const cmds = ["context", "impact", "read", "graph", "status", "doctor"];
-  const rules = cmds.map((c) => `      "${prefix} ${c} *": "allow"`).join(",\n");
+  const cmds = ["context", "impact", "read", "graph", "status", "verify"];
+  const rules = cmds
+    .map((c) => `      "${prefix} ${c} *": "allow"`)
+    .join(",\n");
   return (
     `Agar command di atas jalan tanpa persetujuan, gabungkan ke opencode.json\n` +
     `(project root atau ~/.config/opencode/opencode.json):\n\n` +
     `{\n  "permission": {\n    "bash": {\n${rules}\n    }\n  }\n}\n\n` +
-  `Catatan: ScopeCairn tidak mengubah opencode.json Anda secara otomatis.`
+    `Catatan: ScopeCairn tidak mengubah opencode.json Anda secara otomatis.`
   );
+}
+
+// Skill khusus knowledge agent (kirocrew-knowledge, RAG pipeline, dsb).
+// Tidak ada menulis file — hanya baca dan rangkum.
+export function knowledgeSkillMd(prefix: string): string {
+  return `---
+name: scopecairn-knowledge
+description: ScopeCairn context extraction for knowledge and summarization tasks.
+  Use when asked to explain, summarize, document, or audit the codebase — NOT for
+  making code changes.
+allowed-tools: Bash
+---
+
+# ScopeCairn — Knowledge Mode (ReAct)
+
+Reasoning loop: Thought → Action → Observe, max 3 iterasi. Semua Action
+read-only terhadap source, hanya menulis ke \`.scopecairn/\`.
+
+Iterasi 1 — Scope:
+Thought: apa yang ditanyakan user?
+Action: \`${prefix} context --knowledge "<pertanyaan user>" --json\`
+Observe: cek \`high\` + \`symbols[0].score\`.
+- Kosong / semua score <0.15 → reformulasi query (tambah alias domain dari
+  \`.scopecairn/glossary.yml\`, pecah jadi 2 sub-pertanyaan) lalu ulangi sekali.
+- Cukup → lanjut.
+
+Iterasi 2 — Expand:
+Thought: simbol mana yang perlu trace relasi?
+Action (pilih seperlunya, selalu \`--json\`):
+- Relasi modul: \`${prefix} graph <symbol> --json\`
+- Dampak: \`${prefix} impact <path> --json\`
+- Alur A→B: \`${prefix} graph <from> --to <to> --json\`
+Observe: sambungkan hop via \`edges[].rel\` (CALLS/IMPORTS/QUERIES).
+Stop bila rantai sudah menjawab "kenapa / bagaimana".
+
+Iterasi 3 — Ground:
+Thought: apa bukti historis / source-nya?
+Action:
+- \`${prefix} history "<pertanyaan>" --json\` untuk keputusan + co-change.
+- \`${prefix} read symbol <nama> --json\` untuk excerpt (bukan baca file penuh).
+Observe: kutip \`shortSha + subject\` dan \`file:range\` sebagai bukti.
+
+Stop rules: berhenti saat jawaban cukup, atau 3 iterasi, atau \`high\`
+stabil antar iterasi. Jangan menulis atau mengubah file — hanya baca,
+rangkum, dan jelaskan dengan bukti.
+`;
 }
 
 // Perintah aman untuk allowlist (AI-8: read-only terhadap source,
@@ -144,10 +192,10 @@ export const ALLOWLIST_COMMANDS = [
   "read",
   "graph",
   "status",
-  "doctor",
+  "verify",
 ] as const;
 
-export const MANUAL_ONLY_COMMANDS = ["init", "scan", "rebuild"] as const;
+export const MANUAL_ONLY_COMMANDS = ["init", "scan"] as const;
 
 export function allowlistGuide(prefix: string): string {
   const lines = ALLOWLIST_COMMANDS.map((c) => `  ${prefix} ${c}`);

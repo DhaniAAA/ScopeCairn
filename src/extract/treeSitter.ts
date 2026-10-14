@@ -230,6 +230,31 @@ function extractImportItems(node: Node, grammar: string): ExtractedImport[] {
   return items;
 }
 
+const PRIMITIVE_TYPES = new Set([
+  "string", "number", "boolean", "bool", "void", "any", "unknown", "never",
+  "null", "undefined", "symbol", "bigint", "object", "int", "int8", "int16", "int32", "int64",
+  "uint", "uint8", "uint16", "uint32", "uint64", "uintptr", "float", "float32", "float64",
+  "str", "bytes", "dict", "list", "tuple", "set", "frozenset",
+  "byte", "rune", "error", "char", "double", "long", "short",
+  "Promise", "Array", "Record", "Map", "Set", "Optional", "Union", "List", "Dict", "Tuple", "Any", "None"
+]);
+
+function extractCustomTypes(node: Node | null | undefined): string[] {
+  if (!node) return [];
+  const found: string[] = [];
+  const collect = (n: Node) => {
+    if (n.type === "type_identifier" || n.type === "identifier") {
+      const text = n.text.trim();
+      if (text && !PRIMITIVE_TYPES.has(text) && !found.includes(text) && /^[A-Za-z_][A-Za-z0-9_]*$/.test(text)) {
+        found.push(text);
+      }
+    }
+    for (const child of children(n)) collect(child);
+  };
+  collect(node);
+  return found;
+}
+
 export function extractSyntaxTree(relPath: string, source: string): FileExtraction {
   const grammar = grammarForPath(relPath);
   if (!grammar) return { symbols: [], relations: [] };
@@ -248,10 +273,12 @@ export function extractSyntaxTree(relPath: string, source: string): FileExtracti
     const relate = (from: string, to: string, rel: RelationType, confidence = 1, methodCall = false) => {
       relations.push({ from, to, rel, weight: WEIGHT[rel], confidence, ...(methodCall ? { methodCall } : {}) });
     };
-    const visit = (node: Node, owner: string, enclosingClass: boolean) => {
+    const visit = (node: Node, owner: string, enclosingClass: boolean, scope: Map<string, string>) => {
       if (node.type === "comment" || node.type === "ERROR") return;
       let nextOwner = owner;
       let inClass = enclosingClass;
+      let childScope = scope;
+
       if (CLASSES.has(node.type)) {
         const name = nameOf(node);
         if (name) {
@@ -259,11 +286,32 @@ export function extractSyntaxTree(relPath: string, source: string): FileExtracti
           add(name, type, node);
           nextOwner = name;
           inClass = true;
-          const heritage = children(node).find((c) => c.type.includes("heritage") || c.type.includes("superclass") || c.type.includes("extends"));
+          childScope = new Map<string, string>(scope);
+          childScope.set("this", name);
+          childScope.set("self", name);
+
+          const heritage = children(node).find((c) => c.type.includes("heritage") || c.type.includes("superclass") || c.type.includes("extends") || c.type.includes("implements"));
           if (heritage) {
             for (const child of children(heritage)) {
-              const base = identifier(child);
-              if (base && base !== name) relate(name, base, "EXTENDS", 0.9);
+              if (child.type.includes("implements") || child.type.includes("interface")) {
+                for (const iface of extractCustomTypes(child)) {
+                  if (iface !== name) relate(name, iface, "IMPLEMENTS", 0.95);
+                }
+              } else if (child.type.includes("extends") || child.type.includes("superclass")) {
+                for (const base of extractCustomTypes(child)) {
+                  if (base !== name) relate(name, base, "EXTENDS", 0.9);
+                }
+              } else {
+                const base = identifier(child);
+                if (base && base !== name) relate(name, base, "EXTENDS", 0.9);
+              }
+            }
+          }
+          for (const child of children(node)) {
+            if (child.type.includes("implements_clause") || child.type.includes("interfaces")) {
+              for (const iface of extractCustomTypes(child)) {
+                if (iface !== name) relate(name, iface, "IMPLEMENTS", 0.95);
+              }
             }
           }
         }
@@ -275,14 +323,70 @@ export function extractSyntaxTree(relPath: string, source: string): FileExtracti
           add(name, method ? "method" : component ? "component" : "function", node);
           nextOwner = name;
           inClass = false;
+          childScope = new Map<string, string>(scope);
+
+          // Parameter types
+          const paramListNode = node.childForFieldName("parameters") ?? children(node).find((c) => c.type.includes("parameter"));
+          if (paramListNode) {
+            for (const param of children(paramListNode)) {
+              const paramName = param.childForFieldName("name")?.text ?? identifier(param.childForFieldName("pattern") ?? param);
+              const typeNode = param.childForFieldName("type") ?? children(param).find((c) => c.type.includes("type"));
+              const types = extractCustomTypes(typeNode);
+              for (const t of types) {
+                relate(name, t, "PARAM_TYPE", 0.9);
+              }
+              if (paramName && types.length > 0) {
+                childScope.set(paramName, types[0]);
+              }
+            }
+          }
+
+          // Return types
+          const retTypeNode = node.childForFieldName("return_type") ?? node.childForFieldName("type") ?? children(node).find((c) => c.type.includes("return") || (c.type === "type_annotation" && c !== paramListNode));
+          if (retTypeNode) {
+            for (const rt of extractCustomTypes(retTypeNode)) {
+              relate(name, rt, "RETURN_TYPE", 0.9);
+            }
+          }
         }
-      } else if (node.type === "variable_declarator" || node.type === "variable_declaration" && grammar === "go") {
+      } else if (node.type === "variable_declarator" || (node.type === "variable_declaration" && grammar === "go")) {
         const name = nameOf(node);
         if (name) {
           const value = node.childForFieldName("value");
           const callable = value && ["arrow_function", "function_expression", "function", "generator_function"].includes(value.type);
           add(name, callable ? "function" : "variable", node);
-          if (callable) nextOwner = name;
+          if (callable) {
+            nextOwner = name;
+            childScope = new Map<string, string>(scope);
+            const paramListNode = value.childForFieldName("parameters") ?? children(value).find((c) => c.type.includes("parameter"));
+            if (paramListNode) {
+              for (const param of children(paramListNode)) {
+                const paramName = param.childForFieldName("name")?.text ?? identifier(param.childForFieldName("pattern") ?? param);
+                const typeNode = param.childForFieldName("type") ?? children(param).find((c) => c.type.includes("type"));
+                const types = extractCustomTypes(typeNode);
+                for (const t of types) relate(name, t, "PARAM_TYPE", 0.9);
+                if (paramName && types.length > 0) childScope.set(paramName, types[0]);
+              }
+            }
+            const retTypeNode = value.childForFieldName("return_type") ?? children(value).find((c) => c.type === "type_annotation");
+            if (retTypeNode) {
+              for (const rt of extractCustomTypes(retTypeNode)) relate(name, rt, "RETURN_TYPE", 0.9);
+            }
+          } else {
+            const typeNode = node.childForFieldName("type") ?? children(node).find((c) => c.type.includes("type"));
+            const varTypes = extractCustomTypes(typeNode);
+            if (varTypes.length > 0) {
+              for (const vt of varTypes) relate(name, vt, "TYPED_AS", 0.85);
+              childScope.set(name, varTypes[0]);
+            } else if (value && (value.type === "new_expression" || value.type === "call")) {
+              const ctorNode = value.childForFieldName("constructor") ?? value.childForFieldName("function") ?? children(value)[0];
+              const ctor = identifier(ctorNode);
+              if (ctor && !PRIMITIVE_TYPES.has(ctor) && /^[A-Z]/.test(ctor)) {
+                relate(name, ctor, "TYPED_AS", 0.85);
+                childScope.set(name, ctor);
+              }
+            }
+          }
         }
       } else if (node.type === "type_alias_declaration" || node.type === "type_declaration") {
         const name = nameOf(node);
@@ -328,14 +432,19 @@ export function extractSyntaxTree(relPath: string, source: string): FileExtracti
           }
         }
         if (target) {
+          let receiverType: string | undefined = undefined;
+          if (receiver && childScope.has(receiver)) {
+            receiverType = childScope.get(receiver);
+          }
           relations.push({
             from: owner,
             to: target,
             rel: "CALLS",
             weight: WEIGHT["CALLS"],
-            confidence: method ? 0.6 : 0.8,
+            confidence: method ? (receiverType ? 0.95 : 0.6) : 0.8,
             methodCall: method,
             ...(receiver ? { receiver } : {}),
+            ...(receiverType ? { receiverType } : {}),
           });
         }
       }
@@ -346,9 +455,9 @@ export function extractSyntaxTree(relPath: string, source: string): FileExtracti
           if (value) add(value, "element", node);
         }
       }
-      for (const child of children(node)) visit(child, nextOwner, inClass);
+      for (const child of children(node)) visit(child, nextOwner, inClass, childScope);
     };
-    visit(root, "__file__", false);
+    visit(root, "__file__", false, new Map<string, string>());
     return { symbols, relations, ...(imports.length > 0 ? { imports } : {}) };
   });
 }

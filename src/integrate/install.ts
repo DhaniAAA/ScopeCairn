@@ -17,7 +17,7 @@ export interface InstallOutcome {
 export function installTarget(
   repoRoot: string,
   target: AgentTarget,
-  prefix: string
+  prefix: string,
 ): InstallOutcome {
   const abs = path.join(repoRoot, target.rel);
   const block = target.render(prefix);
@@ -30,6 +30,13 @@ export function installTarget(
     const existed = fs.existsSync(abs);
     fs.mkdirSync(path.dirname(abs), { recursive: true });
     fs.writeFileSync(abs, block.endsWith("\n") ? block : block + "\n");
+    // Tulis file extra (mode: "new" selalu, milik penuh ScopeCairn)
+    for (const e of target.extra ?? []) {
+      const eAbs = path.join(repoRoot, e.rel);
+      fs.mkdirSync(path.dirname(eAbs), { recursive: true });
+      const eBlock = e.render(prefix);
+      fs.writeFileSync(eAbs, eBlock.endsWith("\n") ? eBlock : eBlock + "\n");
+    }
     return finish(existed ? "updated" : "generated");
   }
   if (fs.existsSync(abs)) {
@@ -58,10 +65,14 @@ export function installTarget(
  */
 export function removeManagedBlock(
   content: string,
-  render: (prefix: string) => string
+  render: (prefix: string) => string,
 ): { next: string; changed: boolean } {
   for (const p of ["scopecairn", "npx scopecairn"]) {
-    for (const cand of [render(p), render(p).trimEnd(), render(p).trimEnd() + "\n"]) {
+    for (const cand of [
+      render(p),
+      render(p).trimEnd(),
+      render(p).trimEnd() + "\n",
+    ]) {
       if (cand && content.includes(cand)) {
         return { next: foldBlank(content.split(cand).join("")), changed: true };
       }
@@ -69,7 +80,7 @@ export function removeManagedBlock(
   }
   const anchored = new RegExp(
     `\\n*${MARKER}\\n# ScopeCairn[\\s\\S]*?pertanyaan non-coding\\.[ \\t]*(\\n|$)`,
-    ""
+    "",
   );
   if (anchored.test(content)) {
     return { next: foldBlank(content.replace(anchored, "\n")), changed: true };
@@ -88,7 +99,10 @@ function foldBlank(s: string): string {
 }
 
 /** Lepas satu target: hapus file milik penuh, cabut blok marker dari milik user. */
-export function uninstallTarget(repoRoot: string, target: AgentTarget): InstallOutcome {
+export function uninstallTarget(
+  repoRoot: string,
+  target: AgentTarget,
+): InstallOutcome {
   const abs = path.join(repoRoot, target.rel);
   const finish = (how: InstallOutcome["how"]): InstallOutcome => ({
     agent: target.id,
@@ -99,6 +113,14 @@ export function uninstallTarget(repoRoot: string, target: AgentTarget): InstallO
   if (target.mode === "new") {
     fs.rmSync(abs, { force: true });
     pruneEmptyDirs(path.dirname(abs), repoRoot);
+    // Hapus file extra juga
+    for (const e of target.extra ?? []) {
+      const eAbs = path.join(repoRoot, e.rel);
+      if (fs.existsSync(eAbs)) {
+        fs.rmSync(eAbs, { force: true });
+        pruneEmptyDirs(path.dirname(eAbs), repoRoot);
+      }
+    }
     return finish("removed");
   }
   const cur = fs.readFileSync(abs, "utf8");
@@ -130,10 +152,19 @@ function pruneEmptyDirs(dir: string, stop: string): void {
 }
 
 // Antigravity = Skill + Workflow + panduan allowlist (AI-7, §8.6).
-export function installAntigravity(repoRoot: string, prefix = detectPrefix(repoRoot)): string[] {
+export function installAntigravity(
+  repoRoot: string,
+  prefix = detectPrefix(repoRoot),
+): string[] {
   const agentDir = detectAgentDir(repoRoot);
   const out: string[] = [];
-  const skillPath = path.join(repoRoot, agentDir, "skills", "scopecairn", "SKILL.md");
+  const skillPath = path.join(
+    repoRoot,
+    agentDir,
+    "skills",
+    "scopecairn",
+    "SKILL.md",
+  );
   fs.mkdirSync(path.dirname(skillPath), { recursive: true });
   fs.writeFileSync(skillPath, skillMd(prefix));
   out.push(`Skill installed (${path.relative(repoRoot, skillPath)})`);

@@ -252,6 +252,43 @@ export function indexFileRelations(
       }
       continue;
     }
+    if (r.rel === "PARAM_TYPE" || r.rel === "RETURN_TYPE" || r.rel === "TYPED_AS" || r.rel === "IMPLEMENTS") {
+      const src = resolveLocal(r.from);
+      if (!src) continue;
+
+      let dst: number | null = null;
+      if (localImports.has(r.to)) {
+        const imp = localImports.get(r.to)!;
+        const targetMod = resolveModuleFile(db, relPath, imp.moduleSpecifier);
+        if (targetMod) {
+          const symName = imp.importedName === "default" || imp.importedName === "*" ? r.to : imp.importedName;
+          const sym = db
+            .prepare(`SELECT id FROM symbols WHERE file_id = ? AND name = ? AND type IN ('interface', 'type', 'class', 'model') LIMIT 1`)
+            .get(targetMod.fileId, symName) as { id: number } | undefined;
+          if (sym) dst = sym.id;
+        }
+      }
+      if (!dst) {
+        const local = ids.get(r.to) ?? symbolIdInFile(db, fileId, r.to);
+        if (local) dst = local;
+      }
+      if (!dst && importedFileIds.size > 0) {
+        const ph = [...importedFileIds].map(() => "?").join(",");
+        const sym = db
+          .prepare(`SELECT id FROM symbols WHERE file_id IN (${ph}) AND name = ? AND type IN ('interface', 'type', 'class', 'model') LIMIT 1`)
+          .get(...importedFileIds, r.to) as { id: number } | undefined;
+        if (sym) dst = sym.id;
+      }
+      if (!dst) {
+        dst = globalSymbolId(db, r.to, srcDir);
+      }
+      if (dst && src !== dst) {
+        insRel.run(src, dst, r.rel, r.weight, r.confidence, evidenceOf(r.rel, r.confidence));
+        rels++;
+      }
+      continue;
+    }
+
     if (r.rel === "CALLS") {
       const src = resolveLocal(r.from);
       if (!src) continue;
@@ -260,8 +297,85 @@ export function indexFileRelations(
       let conf = r.confidence;
       let ev = evidenceOf("CALLS", conf, r.methodCall);
 
+      // Semantic Typed Resolution: cek receiverType terlebih dahulu bila ada
+      if (r.receiverType) {
+        let typeFileId: number | null = null;
+        let typeSymId: number | null = null;
+
+        if (localImports.has(r.receiverType)) {
+          const imp = localImports.get(r.receiverType)!;
+          const targetMod = resolveModuleFile(db, relPath, imp.moduleSpecifier);
+          if (targetMod) {
+            typeFileId = targetMod.fileId;
+            const symName = imp.importedName === "default" || imp.importedName === "*" ? r.receiverType : imp.importedName;
+            const sym = db
+              .prepare(`SELECT id FROM symbols WHERE file_id = ? AND name = ? LIMIT 1`)
+              .get(targetMod.fileId, symName) as { id: number } | undefined;
+            if (sym) typeSymId = sym.id;
+          }
+        }
+        if (!typeFileId) {
+          const local = ids.get(r.receiverType) ?? symbolIdInFile(db, fileId, r.receiverType);
+          if (local) {
+            typeSymId = local;
+            typeFileId = fileId;
+          }
+        }
+        if (!typeFileId && importedFileIds.size > 0) {
+          const ph = [...importedFileIds].map(() => "?").join(",");
+          const sym = db
+            .prepare(`SELECT id, file_id FROM symbols WHERE file_id IN (${ph}) AND name = ? AND type IN ('class', 'interface', 'model', 'type') LIMIT 1`)
+            .get(...importedFileIds, r.receiverType) as { id: number; file_id: number } | undefined;
+          if (sym) {
+            typeSymId = sym.id;
+            typeFileId = sym.file_id;
+          }
+        }
+        if (!typeFileId) {
+          const gSym = db
+            .prepare(`SELECT s.id, s.file_id FROM symbols s JOIN files f ON f.id = s.file_id WHERE s.name = ? AND s.type IN ('class', 'interface', 'model', 'type') LIMIT 1`)
+            .get(r.receiverType) as { id: number; file_id: number } | undefined;
+          if (gSym) {
+            typeSymId = gSym.id;
+            typeFileId = gSym.file_id;
+          }
+        }
+
+        if (typeFileId) {
+          const sym = db
+            .prepare(`SELECT id FROM symbols WHERE file_id = ? AND name = ? AND type IN ('method', 'function') LIMIT 1`)
+            .get(typeFileId, r.to) as { id: number } | undefined;
+          if (sym) {
+            dst = sym.id;
+            conf = 0.95;
+            ev = "EXTRACTED";
+          } else if (typeSymId) {
+            // Polymorphic dispatch / inherited method lookup via EXTENDS / IMPLEMENTS
+            const parentRows = db
+              .prepare(`SELECT target_id FROM relationships WHERE source_id = ? AND relationship_type IN ('EXTENDS', 'IMPLEMENTS')`)
+              .all(typeSymId) as { target_id: number }[];
+            for (const p of parentRows) {
+              const parentSym = db
+                .prepare(`SELECT s.id, s.file_id FROM symbols s WHERE s.id = ?`)
+                .get(p.target_id) as { id: number; file_id: number } | undefined;
+              if (parentSym) {
+                const mSym = db
+                  .prepare(`SELECT id FROM symbols WHERE file_id = ? AND name = ? AND type IN ('method', 'function') LIMIT 1`)
+                  .get(parentSym.file_id, r.to) as { id: number } | undefined;
+                if (mSym) {
+                  dst = mSym.id;
+                  conf = 0.9;
+                  ev = "EXTRACTED";
+                  break;
+                }
+              }
+            }
+          }
+        }
+      }
+
       // Receiver-based call: e.g. u.format() or pkg.Func() or this.method()
-      if (r.receiver) {
+      if (!dst && r.receiver) {
         if (r.receiver === "this" || r.receiver === "self") {
           dst = ids.get(r.to) ?? symbolIdInFile(db, fileId, r.to);
           if (dst) {

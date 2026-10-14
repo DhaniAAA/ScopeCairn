@@ -1,18 +1,39 @@
-import { openDb } from "../db.js";
+import fs from "node:fs";
+import path from "node:path";
+import { createRequire } from "node:module";
+import { openDb, dbPath, dataDir } from "../db.js";
 import { logInvocation } from "../invocations.js";
 import { refreshIndex } from "../refresh.js";
 import { findSymbols, neighbors } from "../graph.js";
 import { isProtected, loadProtectedPatterns } from "../scope/protected.js";
+import {
+  normalizeApiPath,
+  parseRouteName,
+  matchSegments,
+  parseApiCalls,
+  hasDynamicMarker,
+} from "../adapters/apiCalls.js";
+import { grammarForPath } from "../extract/treeSitter.js";
 
 // Change Impact Analyzer (PRD FR-08).
 // Input: path file ("src/x.ts"), atau nama simbol ("RequestService").
 // Output: dampak langsung, tak langsung (2-hop), test, komponen UI.
+// Cross-repo: `opts.repos` (daftar path / true = baca .scopecairn/repos.yml)
+// menambah seksi blast radius lintas repo via kontrak CALLS_API ternormalisasi
+// — tanpa command baru, tanpa migrasi skema, read-only ke repo lain.
+
+import { cmdTestSelect } from "./testselect.js";
 
 export async function cmdImpact(
   repoRoot: string,
   target: string,
-  opts: { noRefresh?: boolean } = {}
+  opts: { noRefresh?: boolean; json?: boolean; repos?: string | boolean; runTests?: boolean; testsOnly?: boolean } = {}
 ): Promise<void> {
+  if (opts.runTests || opts.testsOnly) {
+    cmdTestSelect(repoRoot, target, { run: opts.runTests, json: opts.json });
+    return;
+  }
+
   if (!opts.noRefresh) await refreshIndex(repoRoot);
 
   const db = openDb(repoRoot);
@@ -286,6 +307,231 @@ export async function cmdImpact(
       reasons.push("risiko tak terhitung (skema lama)");
     }
 
+    // Cross-repo blast radius (Opsi 1): konsumen HTTP di repo lain yang
+    // memanggil route milik repo ini. Edge CALLS_API hanya tersimpan bila
+    // route ada di DB yang sama (adapters/apiCalls.ts: deriveApiCalls),
+    // sehingga untuk repo lain call site di-parse ulang lalu dicocokkan
+    // via kontrak ternormalisasi (method + matchSegments). Read-only:
+    // DB repo lain dibuka readOnly, tak pernah dibuat/di-scan.
+    interface CrossRepoHit {
+      repo: string;
+      file: string;
+      line: number;
+      method: string;
+      normalized: string;
+      evidence: string;
+    }
+    const crossRepoHits: CrossRepoHit[] = [];
+    const crossRepoNotes: string[] = [];
+    const reposOpt = opts.repos;
+    const wantCrossRepo =
+      reposOpt === true ||
+      (typeof reposOpt === "string" && reposOpt.trim().length > 0);
+    if (wantCrossRepo) {
+      // 1. Kumpulkan route provider milik repo ini dari center + tetangga.
+      const providerRoutes: { method: string | null; normalized: string; rawPath: string }[] = [];
+      const seenRoute = new Set<string>();
+      const pushRoute = (name: string): void => {
+        try {
+          const parsed = parseRouteName(name);
+          const normalized = normalizeApiPath(parsed.path);
+          if (!normalized) return;
+          const key = `${parsed.method ?? "*"} ${normalized}`;
+          if (seenRoute.has(key)) return;
+          seenRoute.add(key);
+          providerRoutes.push({ method: parsed.method, normalized, rawPath: parsed.path });
+        } catch {
+          // abaikan nama route aneh
+        }
+      };
+      if (center.type === "route") pushRoute(center.name);
+      for (const e of direct) {
+        if (e.other.type === "route") pushRoute(e.other.name);
+        if (providerRoutes.length >= 10) break;
+      }
+      if (providerRoutes.length < 10) {
+        try {
+          const rows = db
+            .prepare(`SELECT s.name AS n FROM symbols s JOIN files f ON f.id = s.file_id WHERE f.path = ? AND s.type = 'route' LIMIT 10`)
+            .all(center.file) as { n: string }[];
+          for (const r of rows) {
+            pushRoute(r.n);
+            if (providerRoutes.length >= 10) break;
+          }
+        } catch {
+          // abaikan
+        }
+      }
+      // 2. Resolve daftar repo: flag --repos atau .scopecairn/repos.yml.
+      const MAX_REPOS = 5;
+      let repoList: string[] = [];
+      if (typeof reposOpt === "string" && reposOpt.trim().length > 0) {
+        repoList = reposOpt.split(",").map((s) => s.trim()).filter(Boolean);
+      } else {
+        try {
+          const yml = fs.readFileSync(path.join(dataDir(repoRoot), "repos.yml"), "utf8");
+          const inline = yml.match(/repos\s*:\s*\[(.*?)\]/s)?.[1] ?? "";
+          for (const m of inline.matchAll(/["']([^"']+)["']/g)) repoList.push(m[1]);
+          for (const line of yml.split("\n")) {
+            const t = line.trim();
+            if (t.startsWith("- ")) {
+              const v = t.slice(2).trim().replace(/^["']|["']$/g, "");
+              if (v && !v.startsWith("#")) repoList.push(v);
+            }
+          }
+        } catch {
+          // tanpa repos.yml → beri tahu, bukan gagal
+        }
+      }
+      repoList = [...new Set(repoList)].slice(0, MAX_REPOS);
+      if (providerRoutes.length === 0) {
+        crossRepoNotes.push("tidak ada route provider pada target — cross-repo dilewati");
+      } else if (repoList.length === 0) {
+        crossRepoNotes.push("daftar repo kosong (isi --repos a,b atau .scopecairn/repos.yml)");
+      } else {
+        const req = createRequire(import.meta.url);
+        const staleRepos = new Set<string>();
+        for (const rel of repoList) {
+          if (crossRepoHits.length >= 50) break;
+          let extRoot = "";
+          try {
+            extRoot = path.resolve(repoRoot, rel);
+            if (extRoot === path.resolve(repoRoot)) continue;
+            if (!fs.existsSync(extRoot) || !fs.statSync(extRoot).isDirectory()) {
+              crossRepoNotes.push(`${rel}: direktori tidak ada — dilewati`);
+              continue;
+            }
+            const extDbFile = dbPath(extRoot);
+            if (!fs.existsSync(extDbFile)) {
+              crossRepoNotes.push(`${rel}: belum di-index (tanpa scopecairn.db) — dilewati`);
+              continue;
+            }
+            // Staleness: last_scan >7 hari atau tak terbaca → tandai, tetap lanjut.
+            let stale = false;
+            try {
+              const RODB = req("node:" + "sqlite").DatabaseSync;
+              const tmp = new RODB(extDbFile, { readOnly: true } as never);
+              try {
+                const row = tmp.prepare(`SELECT value AS v FROM meta WHERE key = 'last_scan'`).get() as { v: string } | undefined;
+                if (!row?.v) stale = true;
+                else if (Date.now() - Date.parse(row.v.replace(" ", "T") + "Z") > 7 * 864e5) stale = true;
+              } finally {
+                tmp.close();
+              }
+            } catch {
+              stale = true;
+            }
+            // Kandidat file JS/TS dari index repo lain (tanpa re-scan).
+            const RODB2 = req("node:" + "sqlite").DatabaseSync;
+            const extDb = new RODB2(extDbFile, { readOnly: true } as never);
+            let cand: string[] = [];
+            try {
+              const rows = extDb
+                .prepare(`SELECT path AS p FROM files WHERE path LIKE '%.js' OR path LIKE '%.mjs' OR path LIKE '%.cjs' OR path LIKE '%.jsx' OR path LIKE '%.ts' OR path LIKE '%.tsx' LIMIT 200`)
+                .all() as { p: string }[];
+              cand = rows.map((r) => r.p);
+            } finally {
+              extDb.close();
+            }
+            const label = path.basename(extRoot) || rel;
+            let perRepo = 0;
+            for (const relPath of cand) {
+              if (perRepo >= 10 || crossRepoHits.length >= 50) break;
+              let grammar: string | null = null;
+              try {
+                grammar = grammarForPath(relPath);
+              } catch {
+                continue;
+              }
+              if (!grammar || !["typescript", "tsx", "javascript"].includes(grammar)) continue;
+              let content = "";
+              try {
+                if (fs.statSync(path.join(extRoot, relPath)).size > 500_000) continue;
+                content = fs.readFileSync(path.join(extRoot, relPath), "utf8");
+              } catch {
+                continue;
+              }
+              let calls: { method: string; raw: string; normalized: string; line: number }[] = [];
+              try {
+                calls = parseApiCalls(content, grammar);
+              } catch {
+                continue;
+              }
+              for (const call of calls) {
+                // Strict: method harus cocok (tanpa fuzzy methodMismatch) agar
+                // false positive lintas repo minim.
+                const matched = providerRoutes.filter(
+                  (r) => matchSegments(r.normalized, call.normalized) && (r.method === null || r.method === call.method)
+                );
+                if (matched.length === 0) continue;
+                const evidence =
+                  matched.length > 1
+                    ? "AMBIGUOUS"
+                    : !hasDynamicMarker(call.raw) &&
+                      (matched[0].rawPath === call.raw || matched[0].rawPath.replace(/\/$/, "") === call.raw.replace(/\/$/, ""))
+                      ? "EXTRACTED"
+                      : "INFERRED";
+                crossRepoHits.push({
+                  repo: label,
+                  file: relPath,
+                  line: call.line,
+                  method: call.method,
+                  normalized: call.normalized,
+                  evidence,
+                });
+                perRepo++;
+                if (perRepo >= 10 || crossRepoHits.length >= 50) break;
+              }
+            }
+            if (stale) staleRepos.add(path.basename(extRoot) || rel);
+            // EXTRACTED dulu agar sinyal terkuat di atas.
+            crossRepoHits.sort((a, b) =>
+              (a.evidence === "EXTRACTED" ? 0 : a.evidence === "INFERRED" ? 1 : 2) -
+              (b.evidence === "EXTRACTED" ? 0 : b.evidence === "INFERRED" ? 1 : 2)
+            );
+          } catch {
+            crossRepoNotes.push(`${rel}: gagal dibaca — dilewati`);
+          }
+        }
+        if (staleRepos.size > 0) {
+          crossRepoNotes.push(`index basi (>7 hari / last_scan tak terbaca): ${[...staleRepos].join(", ")} — hasil bisa kurang lengkap, jalankan \`scopecairn scan\` di repo tersebut`);
+        }
+      }
+      if (crossRepoHits.length > 0) {
+        const reposHit = new Set(crossRepoHits.map((h) => h.repo)).size;
+        reasons.push(`terpanggil lintas repo (${crossRepoHits.length} call site di ${reposHit} repo)`);
+        if (risk === "LOW" && crossRepoHits.length >= 3) risk = "MED";
+      }
+    }
+
+    if (opts.json) {
+      console.log(JSON.stringify({
+        target: centerLabel,
+        directFiles: directFiles.slice(0, 15),
+        detail: {
+          importedBy: byRel("IMPORTS", "in"),
+          calls: byRel("CALLS", "out"),
+          calledBy: byRel("CALLS", "in"),
+          queries: byRel("QUERIES", "out"),
+          queriedBy: byRel("QUERIES", "in"),
+          apiOut: byRel("CALLS_API", "out"),
+          apiIn: byRel("CALLS_API", "in"),
+        },
+        indirect: [...indirect.values()].slice(0, 15),
+        tests: testFiles,
+        reachableTests: reachableTests.map(([f, d]) => ({ file: f, hops: d })),
+        ui,
+        apiClients: [...apiClientLabels, ...apiClientUi],
+        crossRepo: crossRepoHits,
+        crossRepoNotes,
+        endpoints,
+        models,
+        risk,
+        reasons,
+        evidence: withLine(center.file, center.id),
+      }, null, 2));
+      return;
+    }
     const lines: string[] = [
       `# Impact: ${centerLabel}`,
       ``,
@@ -297,6 +543,10 @@ export async function cmdImpact(
       `Diimpor oleh: ${byRel("IMPORTS", "in").join(", ") || "-"}`,
       `Memanggil: ${byRel("CALLS", "out").join(", ") || "-"}`,
       `Dipanggil oleh: ${byRel("CALLS", "in").join(", ") || "-"}`,
+      `Tipe parameter: ${byRel("PARAM_TYPE", "out").join(", ") || "-"}`,
+      `Tipe kembalian: ${byRel("RETURN_TYPE", "out").join(", ") || "-"}`,
+      `Dipakai sebagai tipe: ${[...byRel("PARAM_TYPE", "in"), ...byRel("RETURN_TYPE", "in"), ...byRel("TYPED_AS", "in")].join(", ") || "-"}`,
+      `Implementasi: ${[...byRel("IMPLEMENTS", "in"), ...byRel("EXTENDS", "in")].join(", ") || "-"}`,
       `Mengquery: ${byRel("QUERIES", "out").join(", ") || "-"}`,
       `Diquery oleh: ${byRel("QUERIES", "in").join(", ") || "-"}`,
       `Rute: ${[...byRel("ROUTES_TO", "out"), ...byRel("ROUTES_TO", "in")].join(", ") || "-"}`,
@@ -326,6 +576,17 @@ export async function cmdImpact(
       ...(apiClientUi.length > 0 ? apiClientUi.map((u) => `- ${u} (via CALLS/IMPORTS 1 hop)`) : []),
       ...(apiClientLabels.length === 0 ? ["- (tidak ada klien CALLS_API)"] : []),
       ``,
+      ...(wantCrossRepo
+        ? [
+            `## Cross-repo blast radius`,
+            ...crossRepoHits
+              .slice(0, 20)
+              .map((h) => `- [${h.repo}] ${h.file}:${h.line} ${h.method} ${h.normalized} [${h.evidence}]`),
+            ...(crossRepoHits.length === 0 ? ["- (tidak ada konsumen lintas repo terdeteksi)"] : []),
+            ...crossRepoNotes.map((n) => `- ${n}`),
+            ``,
+          ]
+        : []),
       `## Endpoints`,
       ...endpoints.map((e) => `- ${e}`),
       ...(endpoints.length === 0 ? ["- (tidak ada endpoint terkait)"] : []),

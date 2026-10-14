@@ -28,7 +28,10 @@ export type RelationType =
   | "TESTS"
   | "ROUTES_TO"
   | "QUERIES"
-  | "CALLS_API";
+  | "CALLS_API"
+  | "PARAM_TYPE"
+  | "RETURN_TYPE"
+  | "TYPED_AS";
 
 export interface ExtractedSymbol {
   name: string;
@@ -57,6 +60,8 @@ export interface RawRelation {
   methodCall?: boolean;
   /** Receiver objek/namespace (mis. `obj` pada `obj.func()` atau `pkg` pada `pkg.Func()`). */
   receiver?: string;
+  /** Tipe semantik receiver bila berhasil diinferensi dari parameter/variabel lokal. */
+  receiverType?: string;
 }
 
 export interface FileExtraction {
@@ -78,6 +83,9 @@ export function evidenceOf(
     if (confidence >= 0.5) return "INFERRED";
     return "AMBIGUOUS";
   }
+  if (rel === "PARAM_TYPE" || rel === "RETURN_TYPE" || rel === "TYPED_AS" || rel === "IMPLEMENTS") {
+    return confidence >= 0.8 ? "EXTRACTED" : "INFERRED";
+  }
   if (methodCall) return "AMBIGUOUS";
   if (rel === "QUERIES" || rel === "ROUTES_TO" || rel === "TESTS") return "INFERRED";
   if (rel === "USES" || rel === "REFERENCES") return "AMBIGUOUS";
@@ -92,10 +100,13 @@ export const WEIGHT: Record<RelationType, number> = {
   EXPORTS: 0.9,
   TESTS: 0.9,
   ROUTES_TO: 0.9,
+  IMPLEMENTS: 0.85,
+  PARAM_TYPE: 0.85,
+  RETURN_TYPE: 0.85,
   EXTENDS: 0.8,
-  IMPLEMENTS: 0.8,
   QUERIES: 0.8,
   CALLS_API: 0.8,
+  TYPED_AS: 0.75,
   CALLS: 0.7,
   REFERENCES: 0.5,
   USES: 0.5,

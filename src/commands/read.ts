@@ -6,9 +6,11 @@ import { findSymbols } from "../graph.js";
 
 // Symbol-level read (PRD §14): return the symbol's source excerpt,
 // not the whole file.
-export function cmdRead(repoRoot: string, kind: string, name: string): void {
+export function cmdRead(repoRoot: string, kind: string, name: string, opts: { json?: boolean } = {}): void {
   if (kind !== "symbol") {
-    console.log(`Unknown read kind "${kind}". Usage: scopecairn read symbol <nama>`);
+    const msg = `Unknown read kind "${kind}". Usage: scopecairn read symbol <nama>`;
+    if (opts.json) console.log(JSON.stringify({ kind, name, error: msg }, null, 2));
+    else console.log(msg);
     return;
   }
   const db = openDb(repoRoot);
@@ -20,7 +22,8 @@ export function cmdRead(repoRoot: string, kind: string, name: string): void {
       hits.find((h) => h.type !== "file") ??
       hits[0];
     if (!node) {
-      console.log(`No symbol matching "${name}".`);
+      if (opts.json) console.log(JSON.stringify({ kind, name, error: `No symbol matching "${name}".` }, null, 2));
+      else console.log(`No symbol matching "${name}".`);
       return;
     }
     const row = db
@@ -51,8 +54,13 @@ export function cmdRead(repoRoot: string, kind: string, name: string): void {
       }
     }
     const end = Math.min(lines.length, Math.max(row.end_line, row.start_line + 40));
+    const excerpt = lines.slice(start - 1, end).join("\n");
+    if (opts.json) {
+      console.log(JSON.stringify({ name: node.name, type: node.type, file: node.file, range: `${start}-${end}`, excerpt }, null, 2));
+      return;
+    }
     console.log(`# ${node.name} (${node.type}) — ${node.file}:${start}-${end}`);
-    console.log(lines.slice(start - 1, end).join("\n"));
+    console.log(excerpt);
   } finally {
     db.close();
   }

@@ -1,6 +1,34 @@
+import fs from "node:fs";
+import { dataDir } from "../db.js";
 import { scanRepository } from "../scanner.js";
+import { cmdWatch } from "./watch.js";
 
-export async function cmdScan(repoRoot: string): Promise<void> {
+export interface ScanOptions {
+  rebuild?: boolean;
+  clean?: boolean;
+  watch?: boolean;
+  debounce?: number;
+}
+
+export async function cmdScan(repoRoot: string, opts: ScanOptions = {}): Promise<void> {
+  const dir = dataDir(repoRoot);
+
+  if (opts.clean) {
+    fs.rmSync(dir, { recursive: true, force: true });
+    console.log(`Cleaned ${dir}. Removed .scopecairn/. Run \`scopecairn scan\` to rebuild.`);
+    return;
+  }
+
+  if (opts.watch) {
+    await cmdWatch(repoRoot, { debounce: opts.debounce });
+    return;
+  }
+
+  if (opts.rebuild) {
+    fs.rmSync(dir, { recursive: true, force: true });
+    console.log(`Cleaned ${dir}`);
+  }
+
   console.log("ScopeCairn");
   console.log("✓ Repository detected");
   const stats = await scanRepository(repoRoot);

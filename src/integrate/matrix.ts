@@ -3,6 +3,7 @@ import {
   cursorRuleMdc,
   opencodeCommandMd,
   claudeSkillMd,
+  knowledgeSkillMd,
 } from "./templates.js";
 
 // Matriks agent: tiap agent dilayani lewat mekanisme native-nya sendiri
@@ -19,6 +20,8 @@ export interface AgentTarget {
   render: (prefix: string) => string;
   /** Petanda setup agent sudah ada (direktori/file) untuk deteksi otomatis. */
   presentMarker: string;
+  /** File tambahan yang ditulis sekaligus saat install (opsional). */
+  extra?: Array<{ rel: string; render: (prefix: string) => string }>;
 }
 
 export const AGENT_MATRIX: AgentTarget[] = [
@@ -61,6 +64,12 @@ export const AGENT_MATRIX: AgentTarget[] = [
     mode: "new",
     render: genericRuleMd,
     presentMarker: ".kiro",
+    extra: [
+      {
+        rel: ".kiro/skills/scopecairn-knowledge/SKILL.md",
+        render: knowledgeSkillMd,
+      },
+    ],
   },
   {
     id: "opencode",
@@ -76,7 +85,9 @@ export function findTarget(id: string): AgentTarget | undefined {
   return AGENT_MATRIX.find((t) => t.id === id);
 }
 
-export function parseAgentsOption(raw: string | undefined): string[] | "all" | null {
+export function parseAgentsOption(
+  raw: string | undefined,
+): string[] | "all" | null {
   if (!raw) return null;
   if (raw.trim().toLowerCase() === "all") return "all";
   return raw

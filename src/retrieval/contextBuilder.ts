@@ -5,6 +5,7 @@ import { loadProtectedPatterns, isProtected } from "../scope/protected.js";
 import { computeScope, scopeBlock } from "../scope/scope.js";
 import { guardBlock } from "../scope/guard.js";
 import { coChangeSet, groupHistoryFiles, type HistoryAnalog } from "./history/search.js";
+import { demoteHeadings, type ProjectRules } from "../scope/agentsmd.js";
 
 // Context Builder (PRD FR-06): Markdown ringkas untuk agent.
 // Prioritas §14: buang tak-relevan → dedup → level simbol → ringkas → source on-demand.
@@ -28,7 +29,7 @@ export function buildContext(
   task: string,
   result: RetrievalResult,
   cls: Classification,
-  opts?: { escalate?: boolean; repoRoot?: string; history?: HistoryBlock; withDiff?: boolean }
+  opts?: { escalate?: boolean; repoRoot?: string; history?: HistoryBlock; withDiff?: boolean; projectRules?: ProjectRules | null; knowledge?: boolean }
 ): BuiltContext {
   const complex = cls.complexity === "COMPLEX" || opts?.escalate === true;
 
@@ -260,9 +261,46 @@ export function buildContext(
     extraDoD.push(`ubah atau tambah test, seperti pada \`${analogTestSha.shortSha}\``);
   }
 
+  // Project Rules dari AGENTS.md proyek (disembunyikan bila tak ada file).
+  // Ditempatkan di awal agar konvensi terbaca sebelum daftar file.
+  // Heading di dalam AGENTS.md diturunkan (demoted) agar tetap bersarang di bawah
+  // ## Project Rules dan tidak memecah delimiter pemangkasan token.
+  let rulesBlock = "";
+  const rules = opts?.projectRules;
+  if (rules && rules.content) {
+    rulesBlock =
+      `## Project Rules\n\n` +
+      `> Sumber: \`${rules.path}\` — konvensi proyek, berlaku untuk task ini.\n` +
+      (rules.truncated ? `> (dipotong ke anggaran — baca file langsung untuk lengkapnya)\n` : ``) +
+      `\n${demoteHeadings(rules.content)}\n\n`;
+  }
+
+  // F1 --knowledge: explain mode untuk knowledge agent (read-only).
+  // Sembunyikan Scope Required/Optional + Guard coding, ganti dengan
+  // Ringkasan + Kenapa + Cara pakai. Tanpa flag = output lama identik.
+  if (opts?.knowledge) {
+    const mdKnowledge =
+      `# Task Context (Knowledge)\n\n## Task\n${task}\n\n` +
+      `## Complexity\n${cls.complexity} (${cls.reasons.join("; ")})\n\n` +
+      rulesBlock +
+      `## Ringkasan\n` +
+      `File relevan: ${highFiles.slice(0, 5).join(", ") || "-"}${medFiles.length > 0 ? ` (lihat juga: ${medFiles.slice(0, 5).join(", ")})` : ""}\n` +
+      `Simbol kunci: ${hi.slice(0, 5).map((r) => `\`${r.name}\``).join(", ") || "-"}\n\n` +
+      `## Kenapa (trace 2-hop)\n${deps.map((d) => `- ${d}`).join("\n") || "-"}\n\n` +
+      (hotspots.length > 0
+        ? `## Hotspot arsitektur\n${hotspots.join("\n")}\n\n`
+        : ``) +
+      `## Cara pakai\n${hi.slice(0, 8).map(symLine).join("\n") || "-"}\n\n` +
+      `## Related Tests\n${tests.map((t) => `- ${t}`).join("\n") || "-"}\n\n` +
+      historyBlock +
+      cycleWarn;
+    return { markdown: mdKnowledge, high: highFiles, medium: medFiles, tests, dependencies: deps };
+  }
+
   const md =
     `# Task Context\n\n## Task\n${task}\n\n` +
     `## Complexity\n${cls.complexity} (${cls.reasons.join("; ")})\n\n` +
+    rulesBlock +
     `## Relevant Files\n### HIGH\n${highFiles.map((f) => `- ${f}`).join("\n") || "-"}\n` +
     `### MEDIUM\n${medFiles.map((f) => `- ${f}`).join("\n") || "-"}\n\n` +
     `## Key Symbols\n${hi.slice(0, 8).map(symLine).join("\n") || "-"}\n\n` +

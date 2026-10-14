@@ -2,8 +2,27 @@ import fs from "node:fs";
 import path from "node:path";
 import { dataDir, dbPath, openDb } from "../db.js";
 import { detectAdapters } from "../adapters/index.js";
+import { cmdDoctor } from "./doctor.js";
+import { cmdDashboard } from "./dashboard.js";
 
-export function cmdStatus(repoRoot: string): void {
+export interface StatusOptions {
+  doctor?: boolean;
+  verbose?: boolean;
+  html?: boolean;
+  dashboard?: boolean;
+  out?: string;
+}
+
+export async function cmdStatus(repoRoot: string, opts: StatusOptions = {}): Promise<void> {
+  if (opts.doctor) {
+    await cmdDoctor(repoRoot, { verbose: opts.verbose });
+    return;
+  }
+  if (opts.html || opts.dashboard) {
+    cmdDashboard(repoRoot, { out: opts.out });
+    return;
+  }
+
   const dir = dataDir(repoRoot);
   if (!fs.existsSync(path.join(dir, "scopecairn.db"))) {
     console.log("ScopeCairn");

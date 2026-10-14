@@ -16,6 +16,9 @@ export interface ContextOptions {
   maxTokens?: number;
   noHistory?: boolean;
   withDiff?: boolean;
+  noRules?: boolean;
+  knowledge?: boolean;
+  json?: boolean;
 }
 
 // Entry point utama agent (PRD §8.4): satu perintah, ScopeCairn yang
@@ -59,8 +62,13 @@ export async function cmdContext(
       // Selalu aman dipanggil (prinsip 6): tanpa seed pun beri arahan SIMPLE,
       // bukan jalan buntu — agent lanjut dengan pencarian langsung.
       logInvocation(db, "context");
+      if (opts.json) {
+        console.log(JSON.stringify({ task, complexity: "SIMPLE", high: [], medium: [], tests: [], dependencies: [], hotspots: [], analogs: [] }, null, 2));
+        return;
+      }
+      const title = opts.knowledge ? `# Task Context (Knowledge)` : `# Task Context`;
       console.log(
-        `# Task Context\n\n## Task\n${task}\n\n## Complexity\n` +
+        `${title}\n\n## Task\n${task}\n\n## Complexity\n` +
           `SIMPLE (tidak ada simbol cocok di index)\n\n` +
           `Task sederhana. Gunakan pencarian langsung. ` +
           `Bila istilah domain tak cocok dengan nama kode, tambah alias di ` +
@@ -152,11 +160,44 @@ export async function cmdContext(
       }
     }
 
+    // (Commander memetakan --no-rules ke { rules: false }; terima dua bentuk.)
+    const skipRules =
+      opts.noRules === true || (opts as { rules?: boolean }).rules === false;
+    let projectRules: import("../scope/agentsmd.js").ProjectRules | null = null;
+    if (!skipRules) {
+      try {
+        const { loadProjectRules } = await import("../scope/agentsmd.js");
+        projectRules = loadProjectRules(repoRoot);
+      } catch {
+        projectRules = null;
+      }
+    }
+
     const built = buildContext(db, task, result, cls, {
       escalate,
       repoRoot,
       history: historyAnalogs.length > 0 ? { analogs: historyAnalogs, diffStats } : undefined,
+      projectRules,
+      knowledge: opts.knowledge,
     });
+    // F2 --json: envelope machine-readable untuk RAG/knowledge agent.
+    // Default markdown tetap agar konsumen lama tidak pecah.
+    if (opts.json) {
+      const payload = {
+        task,
+        complexity: opts.escalate ? "COMPLEX" : cls.complexity,
+        mode: effectiveMode,
+        knowledge: Boolean(opts.knowledge),
+        high: built.high,
+        medium: built.medium,
+        tests: built.tests,
+        dependencies: built.dependencies,
+        symbols: result.ranked.slice(0, 20).map((r) => ({ name: r.name, type: r.type, file: r.file, score: r.score, reason: r.reason })),
+        analogs: historyAnalogs.map((a) => ({ sha: a.sha, shortSha: a.shortSha, date: a.date, subject: a.subject, score: a.score })),
+      };
+      console.log(JSON.stringify(payload, null, 2));
+      return;
+    }
     let out = built.markdown;
     if (effectiveMode !== "NORMAL") {
       out += `\n\n## Mode\n${effectiveMode}\n`;
@@ -167,7 +208,7 @@ export async function cmdContext(
     const maxTokens = opts.maxTokens;
     if (maxTokens && maxTokens > 0 && Math.ceil(out.length / 4) > maxTokens) {
       const parts = out.split(/\n(?=## )/);
-      for (const sec of ["Analogi riwayat", "Critical hotspots", "Circular dependency warning", "Dependencies", "Related Tests"]) {
+      for (const sec of ["Analogi riwayat", "Critical hotspots", "Hotspot arsitektur", "Circular dependency warning", "Dependencies", "Kenapa (trace 2-hop)", "Cara pakai", "Related Tests", "Project Rules"]) {
         if (Math.ceil(parts.join("\n").length / 4) <= maxTokens) break;
         const i = parts.findIndex((p) => p.startsWith(`## ${sec}`));
         if (i >= 0) parts.splice(i, 1);

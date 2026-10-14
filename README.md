@@ -59,7 +59,7 @@ No MCP server, no embeddings, no network calls, no telemetry.
   Nodes sized by symbols/PageRank, colored by Louvain community.
   Pan, zoom, hover inspect. Double-click to open, no server.
 - **`export` for external tools** — `scopecairn export --format
-  mermaid|graphml|dot|json` writes `.scopecairn/graph.<ext>` for PR
+mermaid|graphml|dot|json` writes `.scopecairn/graph.<ext>` for PR
   diagrams (Mermaid), Gephi/Cytoscape (GraphML), Graphviz (DOT),
   or custom scripts (JSON).
 
@@ -88,8 +88,8 @@ it runs project setup itself.
    npx skills add <github-user>/scopecairn -g
    ```
    (fallback without a skill: add one line to your global agent
-   instructions — `~/.claude/CLAUDE.md` or equivalent: *When the user
-   writes "scopecairn \<path\>", run `scopecairn init \<path\>`.*)
+   instructions — `~/.claude/CLAUDE.md` or equivalent: _When the user
+   writes "scopecairn \<path\>", run `scopecairn init \<path\>`._)
 2. In any project chat, type:
    ```
    scopecairn ./
@@ -122,71 +122,72 @@ After setup, your agent calls ScopeCairn automatically on every coding task.
 To query manually:
 
 ```bash
-scopecairn context "add approval workflow"
-scopecairn context ./                 # repository orientation map
-scopecairn impact src/request/RequestService.ts
-scopecairn read symbol approveRequest
-scopecairn graph RequestService
-scopecairn path handleLogin dbQuery
-scopecairn export --format mermaid
-scopecairn doctor
+scopecairn scan                       # index repository (--rebuild, --clean, --watch)
+scopecairn context "add approval"     # AI agent task context + scope
+scopecairn impact RequestService      # blast radius & affected tests (--run-tests)
+scopecairn graph RequestService       # inspect relations, path (--to), export (--export)
+scopecairn verify                     # pre-commit safety guard (--diff, --arch)
+scopecairn status                     # index statistics & health checks (--doctor, --html)
+scopecairn read symbol approveRequest # symbol-level source excerpt
 ```
 
 Per-agent installers (instead of `init --agents …`):
 
 ```bash
 scopecairn antigravity install   # Skill + Workflow + allowlist guide
-scopecairn claude install        # project skill .claude/skills (also: cursor, windsurf, copilot, kiro)
+scopecairn claude install        # project skill .claude/skills (also: cursor, windsurf, copilot)
+scopecairn kiro install          # steering .kiro/steering + knowledge skill .kiro/skills/scopecairn-knowledge
 scopecairn opencode install      # /scopecairn slash command + permission snippet
 scopecairn claude uninstall      # clean removal, user content preserved
 scopecairn agents list
 ```
 
-## Commands
+## 6 Core Commands
+
+ScopeCairn organizes its capabilities into **6 core commands** aligned with codebase architecture:
+
+| Core Command | Description & Key Options |
+| ------------ | ------------------------- |
+| `scan` | **Index & Database Lifecycle:** Index repository. Options: `--rebuild` (rebuild from scratch), `--clean` (remove `.scopecairn/`), `--watch` (auto-refresh daemon on file save). |
+| `context "<task>"` | **AI Agent Context & Scope:** Main agent entry point with auto-refresh, task classification, relevant context, task scope, and Task Guard. Options: `--escalate`, `--mode NORMAL\|FAST\|SAFE\|AUDIT`, `--max-tokens N`, `--no-history`, `--with-diff`, `--json`. |
+| `impact <target>` | **Blast Radius & Test Selection:** Change impact analysis across direct, indirect, tests, UI components, and API clients. Options: `--run-tests` (run affected tests directly), `--tests` (list affected tests only), `--repos [list]` (cross-repo blast radius). |
+| `graph [symbol]` | **Knowledge Graph & Navigation:** Symbol relations, PageRank centrality, community clusters, and cycle status. Options: `--to <target>` (shortest multi-hop call path), `--export <fmt>` (`mermaid\|graphml\|dot\|json`). |
+| `verify` | **Pre-Commit Safety Guard:** Working tree check against protected files, task scope creep, and circular dependency regressions. Options: `--diff` (structural symbol-level diff vs HEAD), `--arch` (architectural layer rules), `--strict`, `--task <t>`. |
+| `status` | **Health & Diagnostics:** Index statistics and metadata. Options: `--doctor` (integration and adapter health check), `--verbose`, `--html` (generate local HTML dashboard). |
+
+### Helper & Setup Commands
 
 | Command | Description |
-|---|---|
-| `init [path]` | Initial indexing + Skill, Workflow, detected agent skills (`--agents …\|all`; never writes `AGENTS.md`) |
-| `scan` / `rebuild` / `clean` | Manual index management (`scan` incremental; `rebuild` from scratch; `clean` removes `.scopecairn/`) |
-| `status` / `doctor` | Index status (incl. adapters, invocations) and health checks |
-| `context "<task>"` | Main entry point: context + scope (`--escalate`, `--no-refresh`, `--mode NORMAL|FAST|SAFE|AUDIT`, `--max-tokens N`, `--no-history`, `--with-diff`); a path task returns an orientation map |
-| `history "<task>" [--limit N] [--json] [--with-diff]` | Analog commit lama paling mirip (BM25 + recency half-life 180 hari + co-change); co-change set ikut ke Optional di `context` |
-| `impact <path\|symbol>` | Change impact: direct, indirect, tests (via TESTS edges + static CALLS backward reachability), UI, queries, routes. Edge evidence tagged EXTRACTED/INFERRED/AMBIGUOUS |
-| `graph <symbol>` | Symbol relations (+ PageRank, community, cycle status) |
-| `path <from> <to>` | Shortest multi-hop call/dependency path between two symbols |
-| `export --format <fmt>` | Graph export: `mermaid`, `graphml`, `dot`, or `json` (default `.scopecairn/graph.<ext>`, override with `--out`) |
-| `read symbol <name>` | Symbol-level source excerpt (not whole files) |
-| `<agent> install` | Per-agent setup: `antigravity`, `claude`, `gemini`, `cursor`, `windsurf`, `copilot`, `kiro` (each also `uninstall`; `agents list` to see all) |
-| `dashboard` | Generate local HTML dashboard at `.scopecairn/dashboard.html` |
-| `test-select <target> [--run]` | List affected test files via graph dependency traversal & runner detection (`--run` executes runner) |
-| `verify [--task <t>] [--strict]` | Post-edit guard: check modified protected files, task scope creep, and circular dependency regressions |
-| `diff` | Structural symbol-level diff of working tree vs HEAD with breaking impact alerts |
-| `arch-check [--init]` | Check architectural layer rules & disallowed import boundaries (`--init` scaffolds `.scopecairn/arch.json`) |
-| `watch [--debounce <ms>]` | Daemon mode: auto-refresh index in background on file saves |
-| `doctor --verbose` | Also surface adapter/graph errors from `.scopecairn/last-run.log` to stderr |
-| `benchmark [--tune]` | Retrieval recall, irrelevant ratio, context reduction + weight calibration |
-| `update [--check]` | Update ScopeCairn to the latest npm release (`--check` only checks) |
+| ------- | ----------- |
+| `init [path]` | Initial indexing + Skill, Workflow, detected agent skills (`--agents …\|all`). |
+| `read symbol <name>` | Symbol-level source excerpt (not whole files). |
+| `benchmark [--tune]` | Retrieval recall, irrelevant ratio, context reduction + weight tuning. |
+| `update [--check]` | Update ScopeCairn to latest npm release. |
+| `<agent> install` | Agent installers: `antigravity`, `claude`, `cursor`, `windsurf`, `copilot`, `kiro`, `opencode`. |
 
-Agent commands (`context`, `impact`, `read`, `graph`, `status`, `doctor`, `verify`, `diff`, `test-select`, `arch-check`)
-are read-only toward source and only write to `.scopecairn/` — safe to
-allowlist. `init`, `scan`, `rebuild`, and `watch` are manual/user-side commands.
+> [!NOTE]
+> **Backward Compatibility:** All previous standalone commands (`rebuild`, `clean`, `watch`, `doctor`, `dashboard`, `test-select`, `path`, `export`, `diff`, `arch-check`, `history`) are preserved as aliases mapped directly into these 6 core commands.
+
+Agent commands (`context`, `impact`, `read`, `graph`, `status`, `verify`)
+are read-only toward source code and safe to allowlist. `init` and `scan`
+are user-side setup/lifecycle commands.
 
 ## Framework adapters
 
 Detected automatically during `scan` (shown in output and `status`).
 No configuration needed.
 
-| Adapter | Detects | Produces |
-|---|---|---|
-| `nextjs` | `app/`, `pages/`, `next.config.*` | Route symbols (`GET /api/x`, `PAGE /y` incl. route groups, dynamic segments), `ROUTES_TO` handler edges, `QUERIES` handler→model edges |
-| `prisma` | `schema.prisma` | `model` symbols for `QUERIES` resolution |
-| `drizzle` | `drizzle*` paths/config, `db/` schemas | `model` symbols from `pgTable`/`sqliteTable`/`mysqlTable`; `QUERIES` from `db.query.*` relational and `db.select/insert/update/delete` builder calls |
-| `express` | `package.json` deps | Route symbols from `app/router.METHOD(path)`, handler edges |
-| `fastapi` | `.py` routes, requirements/pyproject | Route symbols from `@app.METHOD("/path")` decorators |
-| `nestjs` | `*.controller.ts`, `*.service.ts`, `nest-cli.json` | Route symbols from `@Controller` and `@Get/@Post/...` decorators, `ROUTES_TO` handler edges, `@Injectable()` service providers |
-| `django` | `manage.py`, `urls.py`, `models.py` | Route symbols from `path()`/`re_path()` in `urls.py`, `ROUTES_TO` handler edges, `model` symbols from `models.Model` |
-| `sqlalchemy` | requirements/pyproject | `model` symbols from `class X(Base)`/`__tablename__`; `QUERIES` from `session.query/select` |
-| `vue` | `.vue` SFCs, `package.json` deps | `component` symbols per SFC; `IMPORTS` edges from used components in template |
+| Adapter      | Detects                                            | Produces                                                                                                                                             |
+| ------------ | -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `nextjs`     | `app/`, `pages/`, `next.config.*`                  | Route symbols (`GET /api/x`, `PAGE /y` incl. route groups, dynamic segments), `ROUTES_TO` handler edges, `QUERIES` handler→model edges               |
+| `prisma`     | `schema.prisma`                                    | `model` symbols for `QUERIES` resolution                                                                                                             |
+| `drizzle`    | `drizzle*` paths/config, `db/` schemas             | `model` symbols from `pgTable`/`sqliteTable`/`mysqlTable`; `QUERIES` from `db.query.*` relational and `db.select/insert/update/delete` builder calls |
+| `express`    | `package.json` deps                                | Route symbols from `app/router.METHOD(path)`, handler edges                                                                                          |
+| `fastapi`    | `.py` routes, requirements/pyproject               | Route symbols from `@app.METHOD("/path")` decorators                                                                                                 |
+| `nestjs`     | `*.controller.ts`, `*.service.ts`, `nest-cli.json` | Route symbols from `@Controller` and `@Get/@Post/...` decorators, `ROUTES_TO` handler edges, `@Injectable()` service providers                       |
+| `django`     | `manage.py`, `urls.py`, `models.py`                | Route symbols from `path()`/`re_path()` in `urls.py`, `ROUTES_TO` handler edges, `model` symbols from `models.Model`                                 |
+| `sqlalchemy` | requirements/pyproject                             | `model` symbols from `class X(Base)`/`__tablename__`; `QUERIES` from `session.query/select`                                                          |
+| `vue`        | `.vue` SFCs, `package.json` deps                   | `component` symbols per SFC; `IMPORTS` edges from used components in template                                                                        |
 
 Limits (honest): non-Prisma/Drizzle/SQLAlchemy ORMs, inter-table
 references, raw SQL strings, and fully dynamic table names are not mapped

@@ -6,12 +6,17 @@ import { retrieve } from "../retrieval/retrieve.js";
 import { classify } from "../retrieval/classify.js";
 import { refreshCycles, getCycles, describeCycle } from "../graph/cycles.js";
 import { logInvocation } from "../invocations.js";
+import { cmdDiff } from "./diff.js";
+import { cmdArchCheck } from "./archcheck.js";
 
 export interface VerifyOptions {
   task?: string;
   strict?: boolean;
   json?: boolean;
   noRefresh?: boolean;
+  diff?: boolean;
+  arch?: boolean;
+  init?: boolean;
 }
 
 export interface VerifyResult {
@@ -172,6 +177,15 @@ export async function cmdVerify(
   repoRoot: string,
   opts: VerifyOptions = {}
 ): Promise<void> {
+  if (opts.diff) {
+    cmdDiff(repoRoot, { json: opts.json });
+    return;
+  }
+  if (opts.arch) {
+    cmdArchCheck(repoRoot, { init: opts.init, json: opts.json });
+    return;
+  }
+
   const result = await runVerify(repoRoot, opts);
 
   if (opts.json) {

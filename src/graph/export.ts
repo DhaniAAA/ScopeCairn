@@ -121,7 +121,7 @@ export function buildGraphMd(db: DatabaseSync, repoRoot: string): string {
     const c = (db.prepare(`SELECT COUNT(*) AS n FROM cycles`).get() as { n: number }).n;
     if (c > 0) {
       lines.push(`## Circular dependencies`, ``);
-      lines.push(`- ${c} dependency cycle(s) detected — see \`scopecairn doctor\`.`);
+      lines.push(`- ${c} dependency cycle(s) detected — see \`scopecairn status --doctor\` or \`scopecairn verify\`.`);
       lines.push(``);
     }
   } catch {
@@ -316,7 +316,7 @@ export function exportJson(db: DatabaseSync): string {
   return (
     JSON.stringify(
       {
-        generated_by: "scopecairn export",
+        generated_by: "scopecairn graph --export",
         node_count: nodes.length,
         edge_count: edges.length,
         nodes: nodes.map((n) => ({ id: n.id, name: n.name, type: n.type, file: n.file })),

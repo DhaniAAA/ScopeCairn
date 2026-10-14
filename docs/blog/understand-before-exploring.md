@@ -74,10 +74,10 @@ scopecairn context "fix refund double-charge"
 scopecairn impact refundCharge
 
 # 3. Shortest call chain
-scopecairn path handleRefund refundCharge --json
+scopecairn graph handleRefund --to refundCharge --json
 
 # 4. History analogs
-scopecairn history "refund double-charge" --with-diff
+scopecairn context "refund double-charge" --with-diff
 
 # 5. Re-index after editing
 scopecairn scan

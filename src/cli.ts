@@ -35,14 +35,14 @@ program
 6 Core Commands:
   $ scopecairn scan                       index repository (--rebuild, --clean, --watch)
   $ scopecairn context "add login"        AI agent context + scope for a task
-  $ scopecairn impact src/auth/login.ts   change blast radius & test selection (--run-tests)
-  $ scopecairn graph RelationType         inspect graph relations, path (--to), export (--export)
+  $ scopecairn impact src/indexer.ts      change blast radius & test selection (--run-tests)
+  $ scopecairn graph buildContext         inspect graph relations, path (--to), export (--export)
   $ scopecairn verify                     safety guard: protected, scope, cycles (--diff, --arch)
   $ scopecairn status                     health & index status (--doctor, --html)
 
 Helper & Setup Commands:
   $ scopecairn init                      index repo + setup agent integration
-  $ scopecairn read symbol approveRequest symbol-level source excerpt
+  $ scopecairn read symbol indexFileSymbols symbol-level source excerpt
 
 Agent commands (context, impact, read, graph, status, verify) are
 read-only toward source and only write to .scopecairn/ — safe to allowlist.

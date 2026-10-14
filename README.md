@@ -24,15 +24,15 @@ No MCP server, no embeddings, no network calls, no telemetry.
   Definition of Done, so the agent changes only what matters.
 - **Change impact** — direct, indirect (2-hop), tests, and UI components
   affected by a file or symbol.
-- **Call path tracing** — `scopecairn path <A> <B>` shows the shortest
+- **Call path tracing** — `scopecairn graph <A> --to <B>` shows the shortest
   multi-hop call/dependency chain between two symbols.
 - **Centrality ranking** — weighted PageRank + betweenness cached per
-  symbol; `context` surfaces critical hotspots, `doctor` flags
+  symbol; `context` surfaces critical hotspots, `status --doctor` flags
   single points of failure.
 - **Community detection** — Louvain clustering finds real modules by
   link density (not just folders); `graph` shows each symbol's community.
 - **Cycle detection** — Tarjan SCC finds circular dependencies;
-  reported by `doctor`, warned in `context`, listed in `GRAPH.md`.
+  reported by `status --doctor` and `verify`, warned in `context`, listed in `GRAPH.md`.
 - **Auto-refresh** — `context` and `impact` re-index changed files first;
   run `scan` after editing to close the loop.
 - **Framework adapters** — Next.js (App + Pages Router routes),
@@ -40,8 +40,8 @@ No MCP server, no embeddings, no network calls, no telemetry.
 - **Multi-language** — TypeScript, JavaScript, Python, Java, Go, Rust,
   PHP, C#, C/C++, Ruby, HTML, Vue SFC (plus config/schema files as
   graph nodes).
-- **Multi-agent setup** — skills for Claude Code (plugin + marketplace
-  ready), Antigravity, Cursor, Windsurf, Copilot, Kiro, and an OpenCode
+- **Multi-agent setup** — skills for Claude Code (project skill),
+  Antigravity, Cursor, Windsurf, Copilot, Kiro, and an OpenCode
   slash command. ScopeCairn never touches your `AGENTS.md`/`CLAUDE.md` —
   those hold your repo's details, not tool instructions.
 - **`GRAPH.md` knowledge file** — `.scopecairn/GRAPH.md` is a budgeted
@@ -58,8 +58,8 @@ No MCP server, no embeddings, no network calls, no telemetry.
   click-for-details side panel (callers, callees, centrality scores).
   Nodes sized by symbols/PageRank, colored by Louvain community.
   Pan, zoom, hover inspect. Double-click to open, no server.
-- **`export` for external tools** — `scopecairn export --format
-mermaid|graphml|dot|json` writes `.scopecairn/graph.<ext>` for PR
+- **Graph export for external tools** — `scopecairn graph --export
+  mermaid|graphml|dot|json` writes `.scopecairn/graph.<ext>` for PR
   diagrams (Mermaid), Gephi/Cytoscape (GraphML), Graphviz (DOT),
   or custom scripts (JSON).
 
@@ -111,24 +111,17 @@ Claude Code (project skill, committed with the repo):
 scopecairn claude install
 ```
 
-Or as a plugin from the bundled marketplace (this repo):
-
-```
-/plugin marketplace add <github-user>/scopecairn
-/plugin install scopecairn@scopecairn
-```
-
 After setup, your agent calls ScopeCairn automatically on every coding task.
-To query manually:
+To query manually (replace `src/indexer.ts` or `buildContext` with files/symbols from your codebase):
 
 ```bash
-scopecairn scan                       # index repository (--rebuild, --clean, --watch)
-scopecairn context "add approval"     # AI agent task context + scope
-scopecairn impact RequestService      # blast radius & affected tests (--run-tests)
-scopecairn graph RequestService       # inspect relations, path (--to), export (--export)
-scopecairn verify                     # pre-commit safety guard (--diff, --arch)
-scopecairn status                     # index statistics & health checks (--doctor, --html)
-scopecairn read symbol approveRequest # symbol-level source excerpt
+scopecairn scan                             # index repository (--rebuild, --clean, --watch)
+scopecairn context "tambah fitur auth"      # AI agent task context + scope
+scopecairn impact src/indexer.ts            # blast radius & affected tests (--run-tests)
+scopecairn graph buildContext               # inspect relations, path (--to), export (--export)
+scopecairn verify                           # pre-commit safety guard (--diff, --arch)
+scopecairn status                           # index statistics & health checks (--doctor, --html)
+scopecairn read symbol indexFileSymbols     # symbol-level source excerpt
 ```
 
 Per-agent installers (instead of `init --agents …`):
@@ -211,11 +204,11 @@ Measure retrieval quality anytime: `scopecairn benchmark [--tune]`.
 
 `scan` mengindeks pesan commit git lokal ke tabel `commits`/`commit_files` di
 `.scopecairn/scopecairn.db` (dilewati commit >40 file, lockfile, dan generated).
-Isi commit **tidak** masuk `GRAPH.md`/`GRAPH.html`/`export` (sering di-commit dan
-dibagikan) — riwayat hanya hidup di database lokal dan output `context`/`history`.
+Isi commit **tidak** masuk `GRAPH.md`/`GRAPH.html`/`graph --export` (sering di-commit dan
+dibagikan) — riwayat hanya hidup di database lokal dan output `context`.
 Pesan commit bisa memuat info sensitif; karena tidak keluar dari mesin, risikonya
 kecil. Repo tanpa git atau clone dangkal tetap didukung (riwayat parsial/absen,
-dilaporkan `doctor`).
+dilaporkan `status --doctor`).
 
 ## License
 

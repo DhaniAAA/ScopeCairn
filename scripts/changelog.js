@@ -16,8 +16,8 @@ const version = process.argv[2] || "Unreleased";
 // Saat membuat rilis untuk tag vX, ambil tag SEBELUM vX agar tidak kosong.
 const tagRef = version === "Unreleased" ? null : `v${version}`;
 const prev = tagRef && run(`git rev-parse -q --verify ${tagRef}`)
-  ? run(`git describe --tags --abbrev=0 --match 'v*' ${tagRef}^`)
-  : run("git describe --tags --abbrev=0 --match 'v*'");
+  ? run(`git describe --tags --abbrev=0 --match "v*" ${tagRef}^`)
+  : run('git describe --tags --abbrev=0 --match "v*"');
 const range = prev ? `${prev}..HEAD` : "HEAD";
 const entries = run(`git log ${range} --pretty=format:"- %s (%h)"`);
 const date = new Date().toISOString().slice(0, 10);

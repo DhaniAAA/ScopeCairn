@@ -2,6 +2,9 @@
 
 > Evergreen guide for developers using AI coding agents (Claude Code, Cursor, Copilot, OpenCode). Learn to give your agent only the context it needs — no more exploring the repo from zero.
 
+**Repo:** https://github.com/DhaniAAA/ScopeCairn
+`npm install -g scopecairn` (Node ≥20)
+
 ## The problem
 
 AI coding agents fail not because they are dumb, but because they are blind:
@@ -89,3 +92,11 @@ scopecairn scan
 - [ ] `scan` after editing
 
 That is the whole discipline. Everything else in ScopeCairn (PageRank hotspots, cycles, communities, GRAPH.md) exists to make these 5 commands precise and local-first — no embeddings, no network, no telemetry.
+
+---
+**Try it:** https://github.com/DhaniAAA/ScopeCairn
+```bash
+npm install -g scopecairn
+scopecairn context "your task here"
+```
+Star ⭐ kalau hemat token.

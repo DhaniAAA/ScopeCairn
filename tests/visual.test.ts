@@ -86,6 +86,9 @@ test("renderHtml menghasilkan dokumen HTML interaktif yang valid dan mandiri", (
   assert.ok(html.includes("MyProject"), "Harus memuat judul project");
   assert.ok(html.includes("<canvas id=\"cv\">"), "Harus memuat elemen canvas utama");
   assert.ok(html.includes("<canvas id=\"minimap\">") || html.includes("id=\"hud\"") || html.includes("id=\"cv\""), "Harus memuat canvas view");
+  assert.ok(html.includes("id=\"cm\""), "Harus memuat pemilih skema warna");
+  assert.ok(html.includes("id=\"lm\""), "Harus memuat pemilih visibilitas label");
+  assert.ok(html.includes("strokeText"), "Harus memuat text halo outline untuk keterbacaan label");
   assert.ok(html.includes("src/index.ts"), "Harus memuat data payload node");
   assert.ok(html.includes("</html>"), "Harus ditutup </html>");
 });

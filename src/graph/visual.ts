@@ -65,14 +65,36 @@ function esc(s: string): string {
 }
 
 function moduleOf(file: string): string {
-  const i = file.indexOf("/");
-  return i === -1 ? "." : file.slice(0, i);
+  const parts = file.split("/");
+  if (parts.length <= 1) return ".";
+  if (parts[0] === "src" && parts.length > 2) {
+    return `src/${parts[1]}`;
+  }
+  return parts[0];
 }
 
-function colorFor(mod: string): string {
+const PALETTE = [
+  "#38bdf8", // Sky blue (adapters / core)
+  "#a855f7", // Purple (commands / entrypoints)
+  "#f59e0b", // Amber / Gold (extract / AST)
+  "#10b981", // Emerald (retrieval / search)
+  "#ec4899", // Pink / Rose (graph / visual)
+  "#06b6d4", // Cyan (scope / rules)
+  "#6366f1", // Indigo (db / storage)
+  "#f97316", // Orange (tests)
+  "#14b8a6", // Teal (integrate / install)
+  "#84cc16", // Lime (scripts / tools)
+  "#eab308", // Yellow (config / meta)
+  "#d946ef", // Fuchsia
+  "#64748b", // Slate (others)
+];
+
+function colorFor(key: string): string {
   let h = 0;
-  for (const c of mod) h = (h * 31 + c.charCodeAt(0)) % 360;
-  return `hsl(${h}, 55%, 55%)`;
+  for (let i = 0; i < key.length; i++) {
+    h = (h * 31 + key.charCodeAt(i)) >>> 0;
+  }
+  return PALETTE[h % PALETTE.length];
 }
 
 export interface VisualModel {
@@ -388,8 +410,11 @@ function mulberry32(seed: number): () => number {
 
 function layout(nodes: VNode[], edges: VEdge[]): void {
   for (const n of nodes) {
-    n.color = colorFor(n.cluster >= 0 ? `cluster-${n.cluster}` : n.module);
-    n.r = Math.min(15, 5 + Math.sqrt(n.symbols) * 1.6);
+    n.color = colorFor(n.module);
+    const degScore = (n.inDeg * 1.8 + n.outDeg * 0.9);
+    const prScore = (n.pagerank || 0) * 800;
+    const symScore = Math.sqrt(n.symbols) * 0.8;
+    n.r = Math.min(32, Math.max(7, 6 + Math.sqrt(degScore + prScore + symScore) * 2.8));
   }
   if (nodes.length === 0) return;
   if (nodes.length === 1) {
@@ -1121,13 +1146,17 @@ kbd {
       <option value="interface">interface</option>
       <option value="type">type</option>
     </select>
-    <select id="ef">
-      <option value="">All Relations</option>
-      <option value="CALLS">CALLS</option>
-      <option value="IMPORTS">IMPORTS</option>
-      <option value="EXPORTS">EXPORTS</option>
-      <option value="TESTS">TESTS</option>
-      <option value="EXTENDS">EXTENDS</option>
+    <select id="cm" title="Color Scheme">
+      <option value="module">🎨 Color: Directory / Module</option>
+      <option value="cluster">🎨 Color: Community Cluster</option>
+      <option value="centrality">🔥 Color: Connections / Heatmap</option>
+      <option value="type">🏷️ Color: Symbol Type</option>
+    </select>
+    <select id="lm" title="Label Visibility">
+      <option value="smart">🏷️ Labels: Smart (Important &amp; Auto)</option>
+      <option value="always">🏷️ Labels: Always Visible</option>
+      <option value="connected">🏷️ Labels: Connected Only</option>
+      <option value="hover">🏷️ Labels: On Hover Only</option>
     </select>
     <button class="btn-icon" id="fit">⛶ Fit View</button>
   </div>
@@ -1238,8 +1267,60 @@ var miniCv = document.getElementById('minimap'), miniCtx = miniCv.getContext('2d
 var side = document.getElementById('side'), tip = document.getElementById('tip');
 var bannerFocus = document.getElementById('banner-focus'), focusText = document.getElementById('focus-text');
 var mode = 'cluster', query = '', typeF = '', relF = '';
+var colorSetting = 'module', labelSetting = 'smart';
 var cam = { x: 0, y: 0, scale: 1 }, drag = null, hover = null, sel = null, dpr = 1;
 var darkTheme = true;
+
+var maxFileDeg = 1;
+files.forEach(function(n){ if ((n.inn + n.out) > maxFileDeg) maxFileDeg = n.inn + n.out; });
+var maxSymDeg = 1;
+syms.forEach(function(s){ if ((s.inn + s.out) > maxSymDeg) maxSymDeg = s.inn + s.out; });
+
+var PALETTE = [
+  "#38bdf8", "#a855f7", "#f59e0b", "#10b981", "#ec4899",
+  "#06b6d4", "#6366f1", "#f97316", "#14b8a6", "#84cc16",
+  "#eab308", "#d946ef", "#64748b"
+];
+
+function hashColor(str) {
+  var h = 0;
+  for (var i = 0; i < (str || '').length; i++) {
+    h = (h * 31 + str.charCodeAt(i)) >>> 0;
+  }
+  return PALETTE[h % PALETTE.length];
+}
+
+function heatmapColor(deg, maxDeg) {
+  var ratio = Math.min(1, Math.max(0, deg / Math.max(1, maxDeg)));
+  if (ratio < 0.15) return '#64748b';
+  if (ratio < 0.35) return '#0ea5e9';
+  if (ratio < 0.6) return '#10b981';
+  if (ratio < 0.8) return '#f59e0b';
+  return '#ef4444';
+}
+
+function getFileColor(n, isS, isH) {
+  if (isS) return '#38bdf8';
+  if (isH) return '#f59e0b';
+  if (colorSetting === 'centrality') return heatmapColor(n.inn + n.out, maxFileDeg);
+  if (colorSetting === 'cluster' && n.cluster >= 0) return PALETTE[n.cluster % PALETTE.length];
+  return n.color || hashColor(n.module || 'other');
+}
+
+function getSymbolColor(s, isS, isH) {
+  if (isS) return '#38bdf8';
+  if (isH) return '#f59e0b';
+  if (colorSetting === 'centrality') return heatmapColor(s.inn + s.out, maxSymDeg);
+  if (colorSetting === 'cluster' && s.cluster >= 0) return PALETTE[s.cluster % PALETTE.length];
+  if (s.type === 'class' || s.type === 'interface') return '#a855f7';
+  if (s.type === 'function' || s.type === 'method') return '#38bdf8';
+  if (s.type === 'variable' || s.type === 'constant') return '#f59e0b';
+  if (s.type === 'type') return '#ec4899';
+  if (s.type === 'component') return '#10b981';
+  if (s.type === 'route') return '#06b6d4';
+  if (s.type === 'model') return '#eab308';
+  return hashColor(s.file || 'other');
+}
 
 function isDark() {
   return document.documentElement.getAttribute('data-theme') === 'dark';
@@ -1286,11 +1367,13 @@ function fit(){
 
 function zoomAt(mx, my, factor){
   var s0 = cam.scale;
-  var s1 = Math.min(12, Math.max(0.04, s0 * factor));
-  if (s1 === s0) return;
-  cam.x = mx - (mx - cam.x) * (s1 / s0);
-  cam.y = my - (my - cam.y) * (s1 / s0);
+  var s1 = Math.min(15, Math.max(0.04, s0 * factor));
+  if (Math.abs(s1 - s0) < 0.0001) return;
+  var wx = cam.x + mx / s0;
+  var wy = cam.y + my / s0;
   cam.scale = s1;
+  cam.x = wx - mx / s1;
+  cam.y = wy - my / s1;
   draw();
 }
 
@@ -1379,28 +1462,35 @@ function draw(){
     clusters.forEach(function(c){
       var isSel = (sel && sel.kind === 'cluster' && sel.key === c.key);
       var isH = (hover && hover.kind === 'cluster' && hover.key === c.key);
-      var rad = Math.max(6, c.r * s);
+      var rad = Math.max(8, c.r * s);
 
       // Outer hull glow
       ctx.beginPath();
-      ctx.arc(X(c.x), Y(c.y), rad * 1.6, 0, 2 * Math.PI);
-      ctx.fillStyle = isSel ? 'rgba(56, 189, 248, 0.2)' : 'rgba(56, 189, 248, 0.05)';
+      ctx.arc(X(c.x), Y(c.y), rad * 1.5, 0, 2 * Math.PI);
+      ctx.fillStyle = isSel ? 'rgba(56, 189, 248, 0.25)' : 'rgba(56, 189, 248, 0.06)';
       ctx.fill();
 
       // Core bubble
       ctx.beginPath();
       ctx.arc(X(c.x), Y(c.y), rad, 0, 2 * Math.PI);
-      ctx.fillStyle = isSel ? '#0ea5e9' : isH ? '#38bdf8' : (dark ? '#334155' : '#64748b');
+      var clusterCol = hashColor(c.name || c.key);
+      ctx.fillStyle = isSel ? '#0ea5e9' : (isH ? '#f59e0b' : clusterCol);
       ctx.fill();
-      ctx.strokeStyle = isSel ? '#fff' : (dark ? '#475569' : '#cbd5e1');
-      ctx.lineWidth = (isSel ? 3 : 1.5) * dpr;
+      ctx.strokeStyle = isSel ? '#fff' : (dark ? 'rgba(255,255,255,0.4)' : '#cbd5e1');
+      ctx.lineWidth = (isSel ? 3.5 : 2) * dpr;
       ctx.stroke();
 
       // Label with badge count
-      ctx.fillStyle = isSel ? '#38bdf8' : (dark ? '#f1f5f9' : '#0f172a');
-      ctx.font = 'bold ' + Math.max(10, Math.min(14, 12 * dpr)) + 'px system-ui';
+      var labelText = c.name + ' (' + c.members.length + ')';
+      ctx.font = 'bold ' + Math.max(11, Math.min(16, 12.5 * dpr)) + 'px system-ui, sans-serif';
       ctx.textAlign = 'center';
-      ctx.fillText(c.name + ' (' + c.members.length + ')', X(c.x), Y(c.y) - rad - 8 * dpr);
+      ctx.textBaseline = 'middle';
+      ctx.lineJoin = 'round';
+      ctx.lineWidth = 3.5 * dpr;
+      ctx.strokeStyle = dark ? 'rgba(9, 13, 22, 0.95)' : 'rgba(255, 255, 255, 0.95)';
+      ctx.strokeText(labelText, X(c.x), Y(c.y) - rad - 10 * dpr);
+      ctx.fillStyle = isSel ? '#38bdf8' : (dark ? '#f8fafc' : '#0f172a');
+      ctx.fillText(labelText, X(c.x), Y(c.y) - rad - 10 * dpr);
     });
   } else if (mode === 'file') {
     // File Network
@@ -1410,7 +1500,7 @@ function draw(){
       if (relF && e.rel !== relF) return;
 
       var isEdgeActive = !sel || (sel.kind === 'file' && (sel.id === a.id || sel.id === b.id));
-      if (sel && !isEdgeActive) return; // Hide non-connected edges in focus mode
+      if (sel && !isEdgeActive) return;
 
       ctx.beginPath();
       ctx.moveTo(X(a.x), Y(a.y));
@@ -1427,32 +1517,69 @@ function draw(){
       var isDirect = !activeNeighbors || activeNeighbors.has(n.id);
       var isH = hover && hover.kind === 'file' && hover.id === n.id;
       var isS = sel && sel.kind === 'file' && sel.id === n.id;
-      var rad = Math.max(3, n.r * s);
+      var rad = Math.max(4, n.r * s);
 
       ctx.save();
-      if (!isDirect) ctx.globalAlpha = 0.12;
+      if (!isDirect) ctx.globalAlpha = 0.15;
 
       ctx.beginPath();
-      ctx.arc(X(n.x), Y(n.y), rad + (isH ? 3 : 0), 0, 2 * Math.PI);
-      ctx.fillStyle = n.color || '#38bdf8';
+      ctx.arc(X(n.x), Y(n.y), rad + (isH ? 3.5 : 0), 0, 2 * Math.PI);
+      var col = getFileColor(n, isS, isH);
+      ctx.fillStyle = col;
       ctx.fill();
 
       if (isS || isH) {
-        ctx.shadowColor = '#38bdf8';
-        ctx.shadowBlur = 15;
+        ctx.shadowColor = col;
+        ctx.shadowBlur = 18;
       }
       ctx.lineWidth = (isS ? 3.5 : isH ? 2.5 : 1.2) * dpr;
       ctx.strokeStyle = isS ? '#fff' : (dark ? 'rgba(255,255,255,0.7)' : '#1e293b');
       ctx.stroke();
 
-      // Show labels for top nodes or on hover/select
-      if ((isS || isH || (isDirect && s > 0.45))) {
-        ctx.fillStyle = isS ? '#38bdf8' : (dark ? '#f8fafc' : '#0f172a');
-        ctx.font = (11 * dpr) + 'px ui-monospace, monospace';
-        ctx.textAlign = 'left';
+      // Adaptive Label Display
+      var showLabel = false;
+      if (isS || isH) {
+        showLabel = true;
+      } else if (labelSetting === 'always') {
+        showLabel = true;
+      } else if (labelSetting === 'hover') {
+        showLabel = false;
+      } else if (labelSetting === 'connected') {
+        showLabel = isDirect && (n.inn > 0 || n.out > 0);
+      } else {
+        // Smart mode: important hubs always show label
+        if ((n.inn + n.out >= 3) || (n.pr && n.pr > 0.001) || n.r >= 13) showLabel = true;
+        else if (s > 0.35 && (n.inn > 0 || n.out > 0)) showLabel = true;
+        else if (s > 0.65) showLabel = true;
+      }
+
+      if (showLabel) {
         var parts = n.file.split('/');
-        var label = parts.length > 2 ? (parts[0] + '/…/' + parts[parts.length - 1]) : n.file;
-        ctx.fillText(label, X(n.x) + rad + 6 * dpr, Y(n.y) + 4 * dpr);
+        var label = parts[parts.length - 1];
+        var dirName = parts.length > 1 ? parts.slice(0, -1).join('/') : '';
+        var tx = X(n.x) + rad + 6 * dpr;
+        var ty = Y(n.y);
+
+        ctx.font = (isS || isH ? 'bold ' : '600 ') + Math.max(10, Math.min(14, (isS || isH ? 12 : 11) * dpr)) + 'px ui-monospace, SFMono-Regular, Menlo, monospace';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+
+        ctx.lineJoin = 'round';
+        ctx.lineWidth = 3.5 * dpr;
+        ctx.strokeStyle = dark ? 'rgba(9, 13, 22, 0.95)' : 'rgba(255, 255, 255, 0.95)';
+        ctx.strokeText(label, tx, ty);
+
+        ctx.fillStyle = isS ? '#38bdf8' : (isH ? '#f59e0b' : (dark ? '#f8fafc' : '#0f172a'));
+        ctx.fillText(label, tx, ty);
+
+        if ((isS || isH) && dirName) {
+          ctx.font = Math.max(9, Math.min(11, 9.5 * dpr)) + 'px system-ui, sans-serif';
+          ctx.lineWidth = 2.5 * dpr;
+          ctx.strokeStyle = dark ? 'rgba(9, 13, 22, 0.95)' : 'rgba(255, 255, 255, 0.95)';
+          ctx.strokeText(dirName + '/', tx, ty + 12 * dpr);
+          ctx.fillStyle = dark ? '#94a3b8' : '#64748b';
+          ctx.fillText(dirName + '/', tx, ty + 12 * dpr);
+        }
       }
       ctx.restore();
     });
@@ -1484,30 +1611,59 @@ function draw(){
       var isDirect = !activeNeighbors || activeNeighbors.has(n.id);
       var isH = hover && hover.kind === 'symbol' && hover.id === n.id;
       var isS = sel && sel.kind === 'symbol' && sel.id === n.id;
-      var base = 4.5 + Math.min(10, Math.sqrt(n.inn + n.out) * 2 + (n.pr * 350));
-      var rad = Math.max(3, base * s);
+      var conn = n.inn * 1.8 + n.out * 0.9;
+      var base = Math.min(26, Math.max(5, 5 + Math.sqrt(conn) * 2.4 + (n.pr * 500)));
+      var rad = Math.max(3.5, base * s);
 
       ctx.save();
-      if (!isDirect) ctx.globalAlpha = 0.12;
+      if (!isDirect) ctx.globalAlpha = 0.15;
 
       ctx.beginPath();
-      ctx.arc(X(n.x), Y(n.y), rad + (isH ? 3 : 0), 0, 2 * Math.PI);
-      ctx.fillStyle = isS ? '#0ea5e9' : (n.type === 'class' ? '#a855f7' : n.type === 'component' ? '#10b981' : '#38bdf8');
+      ctx.arc(X(n.x), Y(n.y), rad + (isH ? 3.5 : 0), 0, 2 * Math.PI);
+      var col = getSymbolColor(n, isS, isH);
+      ctx.fillStyle = col;
       ctx.fill();
 
       if (isS || isH) {
-        ctx.shadowColor = '#38bdf8';
-        ctx.shadowBlur = 14;
+        ctx.shadowColor = col;
+        ctx.shadowBlur = 18;
       }
       ctx.lineWidth = (isS ? 3.5 : isH ? 2.5 : 1.2) * dpr;
       ctx.strokeStyle = isS ? '#fff' : (dark ? 'rgba(255,255,255,0.8)' : '#0f172a');
       ctx.stroke();
 
-      if (isS || isH || (isDirect && s > 0.55)) {
-        ctx.fillStyle = isS ? '#38bdf8' : (dark ? '#f8fafc' : '#0f172a');
-        ctx.font = (10.5 * dpr) + 'px ui-monospace, monospace';
+      // Adaptive Symbol Label Display
+      var showLabel = false;
+      if (isS || isH) {
+        showLabel = true;
+      } else if (labelSetting === 'always') {
+        showLabel = true;
+      } else if (labelSetting === 'hover') {
+        showLabel = false;
+      } else if (labelSetting === 'connected') {
+        showLabel = isDirect && (n.inn > 0 || n.out > 0);
+      } else {
+        // Smart mode:
+        if ((n.inn + n.out >= 3) || (n.pr && n.pr > 0.001) || base >= 12) showLabel = true;
+        else if (s > 0.45 && (n.inn > 0 || n.out > 0)) showLabel = true;
+        else if (s > 0.8) showLabel = true;
+      }
+
+      if (showLabel) {
+        var tx = X(n.x) + rad + 5 * dpr;
+        var ty = Y(n.y);
+
+        ctx.font = (isS || isH ? 'bold ' : '500 ') + Math.max(10, Math.min(13, 10.5 * dpr)) + 'px ui-monospace, SFMono-Regular, Menlo, monospace';
         ctx.textAlign = 'left';
-        ctx.fillText(n.name.slice(0, 30), X(n.x) + rad + 6 * dpr, Y(n.y) + 4 * dpr);
+        ctx.textBaseline = 'middle';
+
+        ctx.lineJoin = 'round';
+        ctx.lineWidth = 3.5 * dpr;
+        ctx.strokeStyle = dark ? 'rgba(9, 13, 22, 0.95)' : 'rgba(255, 255, 255, 0.95)';
+        ctx.strokeText(n.name.slice(0, 32), tx, ty);
+
+        ctx.fillStyle = isS ? '#38bdf8' : (isH ? '#f59e0b' : (dark ? '#f8fafc' : '#0f172a'));
+        ctx.fillText(n.name.slice(0, 32), tx, ty);
       }
       ctx.restore();
     });
@@ -1633,7 +1789,8 @@ window.__selectNode = function(kind, id) {
 };
 
 wrap.addEventListener('mousedown', function(e){
-  drag = { x: e.clientX - cam.x * cam.scale, y: e.clientY - cam.y * cam.scale };
+  if (e.button !== 0) return;
+  drag = { clientX: e.clientX, clientY: e.clientY, camX: cam.x, camY: cam.y, moved: false };
   wrap.style.cursor = 'grabbing';
 });
 window.addEventListener('mouseup', function(){
@@ -1643,8 +1800,11 @@ window.addEventListener('mouseup', function(){
 window.addEventListener('mousemove', function(e){
   var r = wrap.getBoundingClientRect();
   if (drag) {
-    cam.x = (e.clientX - drag.x) / cam.scale;
-    cam.y = (e.clientY - drag.y) / cam.scale;
+    var dx = e.clientX - drag.clientX;
+    var dy = e.clientY - drag.clientY;
+    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) drag.moved = true;
+    cam.x = drag.camX - dx / cam.scale;
+    cam.y = drag.camY - dy / cam.scale;
     draw();
     tip.style.display = 'none';
     return;
@@ -1675,7 +1835,7 @@ window.addEventListener('mousemove', function(e){
 });
 
 wrap.addEventListener('click', function(e){
-  if (drag && Math.abs(e.clientX - drag.x) > 4) return;
+  if (drag && drag.moved) return;
   var r = wrap.getBoundingClientRect();
   var p = pick(e.clientX - r.left, e.clientY - r.top);
   sel = p;
@@ -1700,6 +1860,48 @@ wrap.addEventListener('wheel', function(e){
   var factor = e.deltaY < 0 ? 1.15 : 0.87;
   zoomAt(mx, my, factor);
 }, { passive: false });
+
+// Touch pinch-to-zoom & pan
+var touchState = null;
+wrap.addEventListener('touchstart', function(e){
+  if (e.touches.length === 1) {
+    var t = e.touches[0];
+    touchState = { mode: 'pan', x: t.clientX, y: t.clientY, camX: cam.x, camY: cam.y };
+  } else if (e.touches.length === 2) {
+    var t0 = e.touches[0], t1 = e.touches[1];
+    var dx = t1.clientX - t0.clientX, dy = t1.clientY - t0.clientY;
+    var dist = Math.sqrt(dx * dx + dy * dy);
+    var r = wrap.getBoundingClientRect();
+    var mx = (t0.clientX + t1.clientX) / 2 - r.left;
+    var my = (t0.clientY + t1.clientY) / 2 - r.top;
+    touchState = { mode: 'pinch', dist: dist, mx: mx, my: my };
+  }
+}, { passive: true });
+
+wrap.addEventListener('touchmove', function(e){
+  if (!touchState) return;
+  if (e.touches.length === 1 && touchState.mode === 'pan') {
+    var t = e.touches[0];
+    var dx = t.clientX - touchState.x;
+    var dy = t.clientY - touchState.y;
+    cam.x = touchState.camX - dx / cam.scale;
+    cam.y = touchState.camY - dy / cam.scale;
+    draw();
+  } else if (e.touches.length === 2 && touchState.mode === 'pinch') {
+    var t0 = e.touches[0], t1 = e.touches[1];
+    var dx = t1.clientX - t0.clientX, dy = t1.clientY - t0.clientY;
+    var dist = Math.sqrt(dx * dx + dy * dy);
+    if (touchState.dist > 0) {
+      var factor = dist / touchState.dist;
+      touchState.dist = dist;
+      zoomAt(touchState.mx, touchState.my, factor);
+    }
+  }
+}, { passive: true });
+
+wrap.addEventListener('touchend', function(){
+  touchState = null;
+});
 
 document.getElementById('btn-clear-focus').addEventListener('click', function(){
   sel = null;
@@ -1731,8 +1933,15 @@ tf.addEventListener('change', function(){
   }
   draw();
 });
+
+var cm = document.getElementById('cm');
+if (cm) cm.addEventListener('change', function(){ colorSetting = cm.value; draw(); });
+
+var lm = document.getElementById('lm');
+if (lm) lm.addEventListener('change', function(){ labelSetting = lm.value; draw(); });
+
 var ef = document.getElementById('ef');
-ef.addEventListener('change', function(){ relF = ef.value; draw(); });
+if (ef) ef.addEventListener('change', function(){ relF = ef.value; draw(); });
 
 // HUD actions
 document.getElementById('fit').addEventListener('click', fit);
@@ -1812,6 +2021,24 @@ window.addEventListener('keydown', function(e){
     fit();
   } else if ((e.key === 'f' || e.key === 'F') && document.activeElement !== q) {
     fit();
+  } else if ((e.key === '+' || e.key === '=') && document.activeElement !== q) {
+    var r = wrap.getBoundingClientRect();
+    zoomAt(r.width / 2, r.height / 2, 1.25);
+  } else if ((e.key === '-' || e.key === '_') && document.activeElement !== q) {
+    var r = wrap.getBoundingClientRect();
+    zoomAt(r.width / 2, r.height / 2, 0.8);
+  } else if ((e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') && document.activeElement !== q) {
+    cam.x -= 40 / cam.scale;
+    draw();
+  } else if ((e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') && document.activeElement !== q) {
+    cam.x += 40 / cam.scale;
+    draw();
+  } else if ((e.key === 'ArrowUp' || e.key === 'w' || e.key === 'W') && document.activeElement !== q) {
+    cam.y -= 40 / cam.scale;
+    draw();
+  } else if ((e.key === 'ArrowDown' || e.key === 's' || e.key === 'S') && document.activeElement !== q) {
+    cam.y += 40 / cam.scale;
+    draw();
   }
 });
 

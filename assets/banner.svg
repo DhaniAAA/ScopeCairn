@@ -1,0 +1,137 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 260" width="100%" height="100%">
+  <defs>
+    <!-- Background Gradient -->
+    <linearGradient id="bannerBg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#070A12" />
+      <stop offset="50%" stop-color="#0B101E" />
+      <stop offset="100%" stop-color="#05070D" />
+    </linearGradient>
+
+    <!-- Border Stroke -->
+    <linearGradient id="bannerBorder" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#00F0FF" stop-opacity="0.6" />
+      <stop offset="35%" stop-color="#6366F1" stop-opacity="0.3" />
+      <stop offset="70%" stop-color="#A855F7" stop-opacity="0.6" />
+      <stop offset="100%" stop-color="#00F0FF" stop-opacity="0.1" />
+    </linearGradient>
+
+    <!-- Text Title Gradient -->
+    <linearGradient id="titleGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#38BDF8" />
+      <stop offset="45%" stop-color="#00F0FF" />
+      <stop offset="100%" stop-color="#C084FC" />
+    </linearGradient>
+
+    <!-- Glow Filter -->
+    <filter id="bannerGlow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="6" result="blur" />
+      <feMerge>
+        <feMergeNode in="blur" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+
+    <filter id="softGlow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="16" result="blur" />
+    </filter>
+  </defs>
+
+  <!-- Banner Outer Card -->
+  <rect x="2" y="2" width="956" height="256" rx="20" fill="url(#bannerBg)" stroke="url(#bannerBorder)" stroke-width="1.5" />
+
+  <!-- Background Decorative Grid Lines -->
+  <g stroke="#1E293B" stroke-width="0.7" opacity="0.35">
+    <line x1="0" y1="65" x2="960" y2="65" />
+    <line x1="0" y1="130" x2="960" y2="130" />
+    <line x1="0" y1="195" x2="960" y2="195" />
+    <line x1="240" y1="0" x2="240" y2="260" />
+    <line x1="480" y1="0" x2="480" y2="260" />
+    <line x1="720" y1="0" x2="720" y2="260" />
+  </g>
+
+  <!-- Ambient Glow Pods -->
+  <circle cx="140" cy="130" r="110" fill="#00F0FF" opacity="0.12" filter="url(#softGlow)" />
+  <circle cx="210" cy="90" r="80" fill="#8B5CF6" opacity="0.15" filter="url(#softGlow)" />
+
+  <!-- ==================== LEFT: EMBEDDED ICON ==================== -->
+  <g transform="translate(40, 20)">
+    <!-- Outer Scope Ring -->
+    <circle cx="110" cy="110" r="85" fill="none" stroke="#6366F1" stroke-width="1.2" stroke-dasharray="3 7" opacity="0.5" />
+    <circle cx="110" cy="110" r="68" fill="none" stroke="#00F0FF" stroke-width="1.8" opacity="0.8" filter="url(#bannerGlow)" />
+    <circle cx="110" cy="82" r="38" fill="none" stroke="#A855F7" stroke-width="2" opacity="0.85" filter="url(#bannerGlow)" />
+
+    <!-- Scope Crosshairs -->
+    <line x1="110" y1="18" x2="110" y2="52" stroke="#00F0FF" stroke-width="2" stroke-linecap="round" filter="url(#bannerGlow)" />
+    <line x1="110" y1="168" x2="110" y2="202" stroke="#00F0FF" stroke-width="2" stroke-linecap="round" filter="url(#bannerGlow)" />
+    <line x1="18" y1="110" x2="52" y2="110" stroke="#00F0FF" stroke-width="2" stroke-linecap="round" filter="url(#bannerGlow)" />
+    <line x1="168" y1="110" x2="202" y2="110" stroke="#00F0FF" stroke-width="2" stroke-linecap="round" filter="url(#bannerGlow)" />
+
+    <!-- Cairn Stones Stack -->
+    <!-- Base Stone -->
+    <polygon points="50,158 110,168 170,158 160,176 110,183 60,176" fill="#141E33" stroke="#334155" stroke-width="1" />
+    <polygon points="50,158 75,145 145,145 170,158 110,168" fill="#1E293B" stroke="#475569" stroke-width="1" />
+    <path d="M 60,176 L 110,183 L 160,176" fill="none" stroke="#00F0FF" stroke-width="1.8" opacity="0.7" filter="url(#bannerGlow)" />
+    
+    <!-- Middle Stone -->
+    <polygon points="72,118 92,107 128,107 148,118 110,127" fill="#334155" stroke="#475569" stroke-width="1" />
+    <polygon points="72,118 110,127 110,143 78,134" fill="#1E293B" stroke="#334155" stroke-width="1" />
+    <polygon points="110,127 148,118 142,134 110,143" fill="#0F172A" stroke="#334155" stroke-width="1" />
+    <path d="M 78,134 L 110,143 L 142,134" fill="none" stroke="#A855F7" stroke-width="1.8" opacity="0.9" filter="url(#bannerGlow)" />
+
+    <!-- Apex Stone -->
+    <polygon points="110,60 88,94 110,100" fill="#334155" stroke="#475569" stroke-width="1" />
+    <polygon points="110,60 110,100 132,94" fill="#1E293B" stroke="#334155" stroke-width="1" />
+    <line x1="110" y1="60" x2="110" y2="100" stroke="#00F0FF" stroke-width="1.8" filter="url(#bannerGlow)" />
+    <circle cx="110" cy="82" r="3.5" fill="#FFFFFF" filter="url(#bannerGlow)" />
+    <circle cx="110" cy="82" r="1.8" fill="#00F0FF" />
+
+    <!-- Constellation Graph Node Accents -->
+    <circle cx="158" cy="85" r="3" fill="#00F0FF" filter="url(#bannerGlow)" />
+    <circle cx="62" cy="100" r="2.5" fill="#A855F7" />
+  </g>
+
+  <!-- ==================== RIGHT: BRAND IDENTITY ==================== -->
+  <g transform="translate(290, 48)">
+    <!-- Small Category Label -->
+    <text x="0" y="24" fill="#38BDF8" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif" font-size="12" font-weight="700" letter-spacing="3.5" opacity="0.9">LOCAL-FIRST AGENT INTELLIGENCE</text>
+
+    <!-- Main Title -->
+    <text x="0" y="74" fill="url(#titleGrad)" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif" font-size="44" font-weight="800" letter-spacing="-0.5">ScopeCairn</text>
+
+    <!-- Subtitle / Mission -->
+    <text x="0" y="108" fill="#94A3B8" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif" font-size="15" font-weight="400" letter-spacing="0.2">
+      Understand before exploring. Precise task scope &amp; codebase knowledge graph for AI coding agents.
+    </text>
+
+    <!-- Feature Badges / Pills -->
+    <g transform="translate(0, 134)">
+      <!-- Badge 1: Knowledge Graph -->
+      <g transform="translate(0, 0)">
+        <rect x="0" y="0" width="144" height="26" rx="13" fill="#0E1726" stroke="#00F0FF" stroke-opacity="0.4" stroke-width="1" />
+        <circle cx="13" cy="13" r="3.5" fill="#00F0FF" />
+        <text x="24" y="17" fill="#E2E8F0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="11" font-weight="600">Knowledge Graph</text>
+      </g>
+
+      <!-- Badge 2: Scope Guard -->
+      <g transform="translate(154, 0)">
+        <rect x="0" y="0" width="138" height="26" rx="13" fill="#141126" stroke="#A855F7" stroke-opacity="0.4" stroke-width="1" />
+        <circle cx="13" cy="13" r="3.5" fill="#A855F7" />
+        <text x="24" y="17" fill="#E2E8F0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="11" font-weight="600">Task Scope Guard</text>
+      </g>
+
+      <!-- Badge 3: Impact Analysis -->
+      <g transform="translate(302, 0)">
+        <rect x="0" y="0" width="134" height="26" rx="13" fill="#0C1B2A" stroke="#38BDF8" stroke-opacity="0.4" stroke-width="1" />
+        <circle cx="13" cy="13" r="3.5" fill="#38BDF8" />
+        <text x="24" y="17" fill="#E2E8F0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="11" font-weight="600">Impact Analysis</text>
+      </g>
+
+      <!-- Badge 4: Zero Telemetry -->
+      <g transform="translate(446, 0)">
+        <rect x="0" y="0" width="134" height="26" rx="13" fill="#0B171B" stroke="#10B981" stroke-opacity="0.4" stroke-width="1" />
+        <circle cx="13" cy="13" r="3.5" fill="#10B981" />
+        <text x="24" y="17" fill="#E2E8F0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="11" font-weight="600">Zero Telemetry</text>
+      </g>
+    </g>
+  </g>
+</svg>

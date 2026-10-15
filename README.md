@@ -1,4 +1,22 @@
-# ScopeCairn
+<p align="center">
+  <img src="assets/icon.png" alt="ScopeCairn Icon" width="140" height="140" style="border-radius: 32px;" />
+</p>
+
+<h1 align="center">ScopeCairn</h1>
+
+<p align="center">
+  <strong>Local-first codebase intelligence &amp; task scope guard for AI coding agents.</strong><br>
+  <em>Understand before exploring. Retrieve before reading.</em>
+</p>
+
+<p align="center">
+  <a href="https://nodejs.org"><img src="https://img.shields.io/badge/node-%3E%3D20-22c55e.svg?style=flat-square" alt="Node.js version"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-6366f1.svg?style=flat-square" alt="License: MIT"></a>
+  <img src="https://img.shields.io/badge/local--first-100%25-00f0ff.svg?style=flat-square" alt="Local-First">
+  <img src="https://img.shields.io/badge/telemetry-zero-a855f7.svg?style=flat-square" alt="Zero Telemetry">
+</p>
+
+---
 
 Local-first codebase intelligence layer for AI coding agents.
 Understand the codebase, then give the agent only what it needs:

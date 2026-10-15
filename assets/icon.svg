@@ -1,0 +1,210 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <defs>
+    <!-- Background Gradient -->
+    <radialGradient id="bgGlow" cx="50%" cy="45%" r="65%">
+      <stop offset="0%" stop-color="#141E33" />
+      <stop offset="60%" stop-color="#0B0F19" />
+      <stop offset="100%" stop-color="#05070D" />
+    </radialGradient>
+
+    <!-- Border Gradient -->
+    <linearGradient id="borderGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00F0FF" stop-opacity="0.8" />
+      <stop offset="50%" stop-color="#6366F1" stop-opacity="0.4" />
+      <stop offset="100%" stop-color="#A855F7" stop-opacity="0.8" />
+    </linearGradient>
+
+    <!-- Scope Laser Gradient -->
+    <linearGradient id="cyanLaser" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38BDF8" />
+      <stop offset="50%" stop-color="#00F0FF" />
+      <stop offset="100%" stop-color="#0284C7" />
+    </linearGradient>
+
+    <linearGradient id="purpleLaser" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#C084FC" />
+      <stop offset="100%" stop-color="#7C3AED" />
+    </linearGradient>
+
+    <!-- Stone Obsidian Shading -->
+    <!-- Top Apex Stone -->
+    <linearGradient id="apexLeft" x1="30%" y1="0%" x2="70%" y2="100%">
+      <stop offset="0%" stop-color="#334155" />
+      <stop offset="100%" stop-color="#0F172A" />
+    </linearGradient>
+    <linearGradient id="apexRight" x1="70%" y1="0%" x2="30%" y2="100%">
+      <stop offset="0%" stop-color="#1E293B" />
+      <stop offset="100%" stop-color="#090D16" />
+    </linearGradient>
+    <linearGradient id="apexBottom" x1="50%" y1="0%" x2="50%" y2="100%">
+      <stop offset="0%" stop-color="#475569" />
+      <stop offset="100%" stop-color="#1E293B" />
+    </linearGradient>
+
+    <!-- Middle Stone -->
+    <linearGradient id="midTop" x1="20%" y1="0%" x2="80%" y2="100%">
+      <stop offset="0%" stop-color="#334155" />
+      <stop offset="100%" stop-color="#1E293B" />
+    </linearGradient>
+    <linearGradient id="midFront" x1="50%" y1="0%" x2="50%" y2="100%">
+      <stop offset="0%" stop-color="#1E293B" />
+      <stop offset="100%" stop-color="#0A0E17" />
+    </linearGradient>
+    <linearGradient id="midLeft" x1="0%" y1="50%" x2="100%" y2="50%">
+      <stop offset="0%" stop-color="#2D3748" />
+      <stop offset="100%" stop-color="#141A24" />
+    </linearGradient>
+
+    <!-- Base Stone -->
+    <linearGradient id="baseTop" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#334155" />
+      <stop offset="100%" stop-color="#1E293B" />
+    </linearGradient>
+    <linearGradient id="baseFront" x1="50%" y1="0%" x2="50%" y2="100%">
+      <stop offset="0%" stop-color="#1A2234" />
+      <stop offset="100%" stop-color="#080C14" />
+    </linearGradient>
+
+    <!-- Filters for Glow Effect -->
+    <filter id="laserGlow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="5" result="blur" />
+      <feMerge>
+        <feMergeNode in="blur" />
+        <feMergeNode in="blur" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+
+    <filter id="intenseGlow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="9" result="blur" />
+      <feMerge>
+        <feMergeNode in="blur" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Container App Squircle (macOS / Modern Icon Standard) -->
+  <rect x="16" y="16" width="480" height="480" rx="108" fill="url(#bgGlow)" stroke="url(#borderGrad)" stroke-width="2.5" />
+
+  <!-- Ambient Internal Backdrop Glow -->
+  <circle cx="256" cy="240" r="140" fill="#00F0FF" opacity="0.07" filter="url(#intenseGlow)" />
+  <circle cx="256" cy="180" r="80" fill="#8B5CF6" opacity="0.12" filter="url(#intenseGlow)" />
+
+  <!-- Target Scope Reticle Elements -->
+  <!-- Outer Dotted Calibration Ring -->
+  <circle cx="256" cy="256" r="190" fill="none" stroke="#6366F1" stroke-width="1.5" stroke-dasharray="3 9" opacity="0.45" />
+
+  <!-- Scope HUD Corner Brackets -->
+  <g stroke="#00F0FF" stroke-width="2" fill="none" opacity="0.4">
+    <!-- Top-Left Bracket -->
+    <path d="M 80 120 L 80 80 L 120 80" />
+    <!-- Top-Right Bracket -->
+    <path d="M 392 80 L 432 80 L 432 120" />
+    <!-- Bottom-Left Bracket -->
+    <path d="M 80 392 L 80 432 L 120 432" />
+    <!-- Bottom-Right Bracket -->
+    <path d="M 432 392 L 432 432 L 392 432" />
+  </g>
+
+  <!-- Concentric Targeting Rings (Mid + Upper Focus) -->
+  <circle cx="256" cy="256" r="150" fill="none" stroke="#00F0FF" stroke-width="2" opacity="0.75" filter="url(#laserGlow)" />
+  <circle cx="256" cy="190" r="85" fill="none" stroke="#A855F7" stroke-width="2.5" opacity="0.8" filter="url(#laserGlow)" />
+  <circle cx="256" cy="190" r="48" fill="none" stroke="#00F0FF" stroke-width="1.8" opacity="0.9" />
+
+  <!-- Scope Reticle Crosshairs (Crosslines with precise gaps) -->
+  <!-- Main Vertical Scope Line -->
+  <line x1="256" y1="75" x2="256" y2="135" stroke="#00F0FF" stroke-width="2.5" stroke-linecap="round" filter="url(#laserGlow)" />
+  <line x1="256" y1="365" x2="256" y2="435" stroke="#00F0FF" stroke-width="2.5" stroke-linecap="round" filter="url(#laserGlow)" />
+  <line x1="256" y1="140" x2="256" y2="350" stroke="#00F0FF" stroke-width="1.2" stroke-dasharray="4 6" opacity="0.5" />
+
+  <!-- Main Horizontal Scope Line -->
+  <line x1="75" y1="256" x2="135" y2="256" stroke="#00F0FF" stroke-width="2.5" stroke-linecap="round" filter="url(#laserGlow)" />
+  <line x1="377" y1="256" x2="437" y2="256" stroke="#00F0FF" stroke-width="2.5" stroke-linecap="round" filter="url(#laserGlow)" />
+
+  <!-- Precision Sub-scope Crosshair at Apex Focal Center (256, 190) -->
+  <line x1="180" y1="190" x2="215" y2="190" stroke="#38BDF8" stroke-width="2" stroke-linecap="round" />
+  <line x1="297" y1="190" x2="332" y2="190" stroke="#38BDF8" stroke-width="2" stroke-linecap="round" />
+
+  <!-- ==================== THE CAIRN STONES ==================== -->
+
+  <!-- BASE STONE (Foundation / Repository Grounding) -->
+  <g id="base-stone">
+    <!-- Base Shadow / Glow Rim -->
+    <ellipse cx="256" cy="385" rx="145" ry="32" fill="#00F0FF" opacity="0.1" filter="url(#laserGlow)" />
+    
+    <!-- Facets of Base Stone -->
+    <!-- Front Face -->
+    <polygon points="120,365 256,388 392,365 372,405 256,418 140,405" fill="url(#baseFront)" stroke="#1E293B" stroke-width="1" />
+    <!-- Top Face -->
+    <polygon points="120,365 170,335 342,335 392,365 256,388" fill="url(#baseTop)" stroke="#334155" stroke-width="1" />
+    <!-- Bottom Bevel Rim Highlight -->
+    <path d="M 140,405 L 256,418 L 372,405" fill="none" stroke="#00F0FF" stroke-width="2" opacity="0.65" filter="url(#laserGlow)" />
+    
+    <!-- Codebase Knowledge Graph Circuit Trace on Base Stone -->
+    <path d="M 165,372 L 210,378 L 245,368 L 295,380 L 340,368" fill="none" stroke="#00F0FF" stroke-width="1.8" opacity="0.75" />
+    <circle cx="210" cy="378" r="3.5" fill="#00F0FF" filter="url(#laserGlow)" />
+    <circle cx="245" cy="368" r="3" fill="#A855F7" />
+    <circle cx="295" cy="380" r="3.5" fill="#00F0FF" filter="url(#laserGlow)" />
+  </g>
+
+  <!-- MIDDLE STONE (Task Context & Module Balance) -->
+  <g id="middle-stone">
+    <!-- Floating Shadow between base and middle -->
+    <ellipse cx="256" cy="318" rx="100" ry="16" fill="#000000" opacity="0.6" />
+
+    <!-- Facets of Middle Stone -->
+    <!-- Top Facet -->
+    <polygon points="170,270 215,245 297,245 342,270 256,290" fill="url(#midTop)" stroke="#475569" stroke-width="1" />
+    <!-- Left Facet -->
+    <polygon points="170,270 256,290 256,325 185,305" fill="url(#midLeft)" stroke="#1E293B" stroke-width="1" />
+    <!-- Right Facet -->
+    <polygon points="256,290 342,270 327,305 256,325" fill="url(#midFront)" stroke="#1E293B" stroke-width="1" />
+
+    <!-- Edge Neon Accent Highlight -->
+    <path d="M 170,270 L 256,290 L 342,270" fill="none" stroke="#818CF8" stroke-width="2" opacity="0.8" />
+    <path d="M 185,305 L 256,325 L 327,305" fill="none" stroke="#A855F7" stroke-width="2.2" opacity="0.85" filter="url(#laserGlow)" />
+
+    <!-- Graph Relation Line (Edge) -->
+    <path d="M 205,282 L 235,275 L 275,295 L 305,280" fill="none" stroke="#38BDF8" stroke-width="1.5" opacity="0.8" />
+    <circle cx="235" cy="275" r="3" fill="#38BDF8" filter="url(#laserGlow)" />
+    <circle cx="275" cy="295" r="3.5" fill="#C084FC" filter="url(#laserGlow)" />
+  </g>
+
+  <!-- APEX STONE (The Summit / Target Scope Focal Beacon) -->
+  <g id="apex-stone">
+    <!-- Hover Shadow -->
+    <ellipse cx="256" cy="235" rx="50" ry="10" fill="#000000" opacity="0.7" />
+
+    <!-- Facets of Apex Jewel / Pyramid Stone -->
+    <!-- Left Facet -->
+    <polygon points="256,140 205,215 256,228" fill="url(#apexLeft)" stroke="#475569" stroke-width="1" />
+    <!-- Right Facet -->
+    <polygon points="256,140 256,228 307,215" fill="url(#apexRight)" stroke="#334155" stroke-width="1" />
+    <!-- Top Ridge Line -->
+    <line x1="256" y1="140" x2="256" y2="228" stroke="#00F0FF" stroke-width="2" opacity="0.9" filter="url(#laserGlow)" />
+
+    <!-- Rim Accents -->
+    <path d="M 205,215 L 256,228 L 307,215" fill="none" stroke="#00F0FF" stroke-width="2.5" opacity="0.9" filter="url(#laserGlow)" />
+
+    <!-- Focal Center Reticle Core -->
+    <circle cx="256" cy="190" r="5" fill="#FFFFFF" filter="url(#intenseGlow)" />
+    <circle cx="256" cy="190" r="2.5" fill="#00F0FF" />
+  </g>
+
+  <!-- Constellation / Knowledge Graph Nodes floating around -->
+  <g id="graph-nodes">
+    <circle cx="370" cy="195" r="4" fill="#00F0FF" opacity="0.85" filter="url(#laserGlow)" />
+    <line x1="340" y1="210" x2="370" y2="195" stroke="#00F0FF" stroke-width="1" stroke-dasharray="2 3" opacity="0.5" />
+
+    <circle cx="140" cy="225" r="3.5" fill="#A855F7" opacity="0.85" filter="url(#laserGlow)" />
+    <line x1="170" y1="240" x2="140" y2="225" stroke="#A855F7" stroke-width="1" stroke-dasharray="2 3" opacity="0.5" />
+
+    <circle cx="345" cy="330" r="3.5" fill="#38BDF8" opacity="0.8" filter="url(#laserGlow)" />
+    <circle cx="165" cy="325" r="4" fill="#00F0FF" opacity="0.8" filter="url(#laserGlow)" />
+  </g>
+
+  <!-- Calibrated Boundary Angle Marks (Degree coordinates) -->
+  <text x="256" y="60" text-anchor="middle" fill="#00F0FF" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, monospace" font-size="11" font-weight="700" letter-spacing="3" opacity="0.75">SCOPE·CAIRN</text>
+  <text x="256" y="465" text-anchor="middle" fill="#818CF8" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, monospace" font-size="9" font-weight="600" letter-spacing="4" opacity="0.6">CODEBASE INTELLIGENCE</text>
+</svg>

@@ -566,6 +566,7 @@ export function renderHtml(model: VisualModel, title: string, generated: string)
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${esc(title)} — ScopeCairn Knowledge Explorer</title>
+<script src="https://unpkg.com/vis-network@9.1.2/standalone/umd/vis-network.min.js"></script>
 <style>
 :root {
   --bg: #090d16;
@@ -610,110 +611,59 @@ body {
   display: flex;
   flex-direction: column;
 }
-header {
-  padding: 10px 16px;
+header.navbar {
+  height: 50px;
+  min-height: 50px;
+  padding: 0 16px;
   background: var(--panel);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
   border-bottom: 1px solid var(--line);
   z-index: 10;
   display: flex;
-  flex-direction: column;
-  gap: 8px;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
-}
-.header-top {
-  display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  flex-wrap: wrap;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.15);
+}
+.nav-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.nav-center {
+  flex: 1;
+  max-width: 440px;
+  display: flex;
+  justify-content: center;
+}
+.nav-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 .brand-group {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
+  cursor: pointer;
 }
 .brand-icon {
-  width: 28px;
-  height: 28px;
-  border-radius: 8px;
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
   background: linear-gradient(135deg, #0ea5e9, #8b5cf6);
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 15px;
-  box-shadow: 0 0 12px var(--acc-glow);
+  font-size: 14px;
+  box-shadow: 0 0 10px var(--acc-glow);
 }
 .brand-title {
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 700;
   letter-spacing: -0.01em;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.brand-meta {
-  font-size: 11.5px;
-  color: var(--mut);
-}
-.stats-badges {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-.badge {
-  background: var(--badge-bg);
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 3px 8px;
-  font-size: 11.5px;
-  font-weight: 500;
-  color: var(--mut);
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-.badge strong {
-  color: var(--ink);
-  font-weight: 600;
-}
-.badge.accent {
-  background: var(--acc-glow);
-  color: var(--acc);
-  border-color: rgba(56, 189, 248, 0.3);
-}
-.top-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-left: auto;
-}
-.btn-icon {
-  background: var(--card-bg);
-  border: 1px solid var(--line);
-  color: var(--ink);
-  border-radius: 8px;
-  padding: 6px 10px;
-  font-size: 12.5px;
-  font-weight: 500;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  transition: all .15s ease;
-}
-.btn-icon:hover {
-  background: var(--line-strong);
-  border-color: var(--acc);
-  color: var(--acc);
-}
-#bar {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  flex-wrap: wrap;
+  white-space: nowrap;
 }
 .seg {
   display: inline-flex;
@@ -727,15 +677,13 @@ header {
   border: 0;
   background: transparent;
   color: var(--mut);
-  padding: 5px 12px;
+  padding: 4px 10px;
   font-size: 12px;
   font-weight: 600;
   border-radius: 6px;
   cursor: pointer;
   transition: all .15s ease;
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
+  white-space: nowrap;
 }
 .seg button:hover {
   color: var(--ink);
@@ -747,14 +695,12 @@ header {
 }
 .search-wrapper {
   position: relative;
-  flex: 1;
-  min-width: 200px;
-  max-width: 340px;
+  width: 100%;
 }
 .search-wrapper input {
   width: 100%;
   padding: 6px 30px 6px 28px;
-  font-size: 12.5px;
+  font-size: 12px;
   background: var(--card-bg);
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -788,9 +734,9 @@ header {
   padding: 1px 4px;
   pointer-events: none;
 }
-#bar select {
-  padding: 6px 10px;
-  font-size: 12.5px;
+.nav-right select {
+  padding: 5px 8px;
+  font-size: 12px;
   background: var(--card-bg);
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -798,8 +744,28 @@ header {
   outline: none;
   cursor: pointer;
 }
-#bar select:focus {
+.nav-right select:focus {
   border-color: var(--acc);
+}
+.btn-icon {
+  background: var(--card-bg);
+  border: 1px solid var(--line);
+  color: var(--ink);
+  border-radius: 8px;
+  padding: 5px 9px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  transition: all .15s ease;
+  white-space: nowrap;
+}
+.btn-icon:hover {
+  background: var(--line-strong);
+  border-color: var(--acc);
+  color: var(--acc);
 }
 #main {
   flex: 1;
@@ -1099,71 +1065,110 @@ kbd {
   font-family: ui-monospace, monospace;
   font-size: 11px;
 }
+#vis-net {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+body.use-vis #cv {
+  display: none !important;
+}
+body:not(.use-vis) #vis-net {
+  display: none !important;
+}
+.side-footer {
+  margin-top: auto;
+  padding: 12px 16px;
+  border-top: 1px solid var(--line);
+  background: var(--card-bg);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.settings-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.btn-text-sm {
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--mut);
+  font-size: 11px;
+  padding: 2px 7px;
+  cursor: pointer;
+  transition: all .15s ease;
+}
+.btn-text-sm:hover {
+  background: var(--line);
+  color: var(--ink);
+}
+.settings-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.setting-item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.setting-item label {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: var(--mut);
+}
+.setting-item select {
+  width: 100%;
+  padding: 5px 6px;
+  font-size: 11.5px;
+  background: var(--panel-solid);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--ink);
+  outline: none;
+}
+.setting-item select:focus {
+  border-color: var(--acc);
+}
 </style>
 </head>
 <body>
-<header>
-  <div class="header-top">
-    <div class="brand-group">
+<header class="navbar">
+  <div class="nav-left">
+    <div class="brand-group" id="brand-home" title="ScopeCairn">
       <div class="brand-icon">⬡</div>
-      <div>
-        <div class="brand-title">${esc(title)}</div>
-        <div class="brand-meta">Generated by <code>scopecairn scan</code> · ${esc(generated)}</div>
-      </div>
+      <div class="brand-title">${esc(title)}</div>
     </div>
-    <div class="stats-badges">
-      <div class="badge"><strong>${model.nodes.length}</strong> Files</div>
-      <div class="badge"><strong>${model.symbols.length}</strong> Symbols</div>
-      <div class="badge"><strong>${model.edges.length}</strong> Links</div>
-      ${model.clusterNames.length > 0 ? `<div class="badge accent"><strong>${model.clusterNames.length}</strong> Communities (Q=${model.modularity.toFixed(3)})</div>` : ""}
-      ${truncNote ? `<div class="badge" title="Budget limit">${esc(truncNote)}</div>` : ""}
-    </div>
-    <div class="top-actions">
-      <button class="btn-icon" id="btn-theme" title="Toggle theme">🌙 Theme</button>
-      <button class="btn-icon" id="btn-shortcuts" title="Keyboard shortcuts">⌨️</button>
-      <button class="btn-icon" id="btn-side-toggle" title="Toggle inspector">◨ Panel</button>
-    </div>
-  </div>
-  <div id="bar">
     <div class="seg" role="tablist">
-      <button data-mode="cluster" class="on">Communities</button>
-      <button data-mode="file">Files</button>
+      <button data-mode="cluster">Communities</button>
+      <button data-mode="file" class="on">Files</button>
       <button data-mode="symbol">Symbols</button>
     </div>
+  </div>
+
+  <div class="nav-center">
     <div class="search-wrapper">
       <span class="search-icon">🔍</span>
       <input id="q" placeholder="Search node, module, type…" autocomplete="off">
       <span class="search-kbd">/</span>
     </div>
-    <select id="tf">
-      <option value="">All Types</option>
-      <option value="function">function</option>
-      <option value="class">class</option>
-      <option value="method">method</option>
-      <option value="route">route</option>
-      <option value="model">model</option>
-      <option value="component">component</option>
-      <option value="interface">interface</option>
-      <option value="type">type</option>
-    </select>
-    <select id="cm" title="Color Scheme">
-      <option value="module">🎨 Color: Directory / Module</option>
-      <option value="cluster">🎨 Color: Community Cluster</option>
-      <option value="centrality">🔥 Color: Connections / Heatmap</option>
-      <option value="type">🏷️ Color: Symbol Type</option>
-    </select>
-    <select id="lm" title="Label Visibility">
-      <option value="smart">🏷️ Labels: Smart (Important &amp; Auto)</option>
-      <option value="always">🏷️ Labels: Always Visible</option>
-      <option value="connected">🏷️ Labels: Connected Only</option>
-      <option value="hover">🏷️ Labels: On Hover Only</option>
-    </select>
-    <button class="btn-icon" id="fit">⛶ Fit View</button>
+  </div>
+
+  <div class="nav-right">
+    <button class="btn-icon" id="fit" title="Fit graph in view">⛶ Fit</button>
+    <button class="btn-icon" id="btn-theme" title="Toggle theme">🌙 Theme</button>
+    <button class="btn-icon" id="btn-side-toggle" title="Toggle inspector">◨ Inspector</button>
   </div>
 </header>
 
 <div id="main">
   <div id="wrap">
+    <div id="vis-net"></div>
     <canvas id="cv"></canvas>
 
     <div id="banner-focus">
@@ -1188,15 +1193,55 @@ kbd {
     <div class="side-header">
       <div>
         <h2 id="side-title">ScopeCairn Inspector</h2>
-        <div class="meta-chip" id="side-sub">Click node to inspect dependencies</div>
+        <div class="meta-chip" id="side-sub">${model.nodes.length} Files · ${model.symbols.length} Symbols · ${model.edges.length} Links</div>
       </div>
-      <button class="side-close" id="side-close-btn">✕</button>
+      <button class="side-close" id="side-close-btn" title="Close inspector">✕</button>
     </div>
     <div class="side-content" id="side-body">
       <div class="metric-card" style="text-align:center;padding:24px 10px;">
         <div style="font-size:24px;margin-bottom:8px;">🎯</div>
         <div style="font-size:13px;font-weight:600;margin-bottom:4px;">No Selection</div>
-        <div style="font-size:11.5px;color:var(--mut);">Click on any node to isolate its connections, view centrality scores, and inspect callers & callees.</div>
+        <div style="font-size:11.5px;color:var(--mut);">Click on any node to isolate its connections, view centrality scores, and inspect callers &amp; callees.</div>
+      </div>
+    </div>
+    <div class="side-footer">
+      <div class="settings-header">
+        <span class="section-title" style="margin:0;">Display &amp; Filters</span>
+        <button class="btn-text-sm" id="btn-shortcuts" title="Keyboard shortcuts">⌨️ Shortcuts</button>
+      </div>
+      <div class="settings-grid">
+        <div class="setting-item">
+          <label for="cm">Color</label>
+          <select id="cm" title="Color Scheme">
+            <option value="module">🎨 Module</option>
+            <option value="cluster">🎨 Cluster</option>
+            <option value="centrality">🔥 Heatmap</option>
+            <option value="type">🏷️ Type</option>
+          </select>
+        </div>
+        <div class="setting-item">
+          <label for="lm">Labels</label>
+          <select id="lm" title="Label Visibility">
+            <option value="zoom">🔍 On Zoom</option>
+            <option value="smart">⚡ Smart</option>
+            <option value="always">👁️ Always</option>
+            <option value="hover">👆 Hover</option>
+          </select>
+        </div>
+        <div class="setting-item" style="grid-column: span 2;">
+          <label for="tf">Symbol Type</label>
+          <select id="tf" title="Filter by Symbol Type">
+            <option value="">All Symbol Types</option>
+            <option value="function">function</option>
+            <option value="class">class</option>
+            <option value="method">method</option>
+            <option value="route">route</option>
+            <option value="model">model</option>
+            <option value="component">component</option>
+            <option value="interface">interface</option>
+            <option value="type">type</option>
+          </select>
+        </div>
       </div>
     </div>
   </aside>
@@ -1263,13 +1308,16 @@ var clusters = [];
 })();
 
 var cv = document.getElementById('cv'), ctx = cv.getContext('2d'), wrap = document.getElementById('wrap');
+var visNetContainer = document.getElementById('vis-net');
 var miniCv = document.getElementById('minimap'), miniCtx = miniCv.getContext('2d');
 var side = document.getElementById('side'), tip = document.getElementById('tip');
 var bannerFocus = document.getElementById('banner-focus'), focusText = document.getElementById('focus-text');
-var mode = 'cluster', query = '', typeF = '', relF = '';
-var colorSetting = 'module', labelSetting = 'smart';
+var mode = 'file', query = '', typeF = '', relF = '';
+var colorSetting = 'module', labelSetting = 'zoom';
 var cam = { x: 0, y: 0, scale: 1 }, drag = null, hover = null, sel = null, dpr = 1;
 var darkTheme = true;
+var useVis = (typeof vis !== 'undefined');
+var visNetwork = null, visNodesDS = null, visEdgesDS = null;
 
 var maxFileDeg = 1;
 files.forEach(function(n){ if ((n.inn + n.out) > maxFileDeg) maxFileDeg = n.inn + n.out; });
@@ -1338,7 +1386,10 @@ function resize(){
 window.addEventListener('resize', resize);
 
 function match(n){
-  if (typeF && (n.type || '') !== typeF) return false;
+  // Filter tipe hanya untuk symbols; files dan communities tidak punya type
+  // sehingga tidak boleh ikut terfilter (sebelumnya memilih Symbol Type
+  // function membuat view Communities dan Files blank).
+  if (typeF && n.type && n.type !== typeF) return false;
   if (!query) return true;
   var hay = ((n.name || n.file || '') + ' ' + (n.type || '') + ' ' + (n.module || '') + ' ' + (n.clusterName || '')).toLowerCase();
   return hay.indexOf(query) >= 0;
@@ -1458,7 +1509,31 @@ function draw(){
   ctx.lineWidth = 1;
 
   if (mode === 'cluster') {
-    // Cluster View
+    // Cluster View — gambar inter-cluster edges dulu agar bubble tidak terlihat tanpa link.
+    (function(){
+      var byKey = {};
+      clusters.forEach(function(c){ byKey[c.key] = c; });
+      var agg = {};
+      fedges.forEach(function(e){
+        var a = byFileId[e.a], b = byFileId[e.b];
+        if (!a || !b) return;
+        var cA = a.cluster >= 0 ? ('c' + a.cluster) : ('m:' + a.module);
+        var cB = b.cluster >= 0 ? ('c' + b.cluster) : ('m:' + b.module);
+        if (cA === cB) return;
+        var k = cA < cB ? (cA + '|' + cB) : (cB + '|' + cA);
+        agg[k] = (agg[k] || 0) + (e.n || 1);
+      });
+      Object.keys(agg).forEach(function(k){
+        var parts = k.split('|'), u = byKey[parts[0]], v = byKey[parts[1]];
+        if (!u || !v) return;
+        ctx.beginPath();
+        ctx.moveTo(X(u.x), Y(u.y));
+        ctx.lineTo(X(v.x), Y(v.y));
+        ctx.strokeStyle = dark ? 'rgba(148, 163, 184, 0.30)' : 'rgba(100, 116, 139, 0.35)';
+        ctx.lineWidth = Math.min(4, 1 + Math.sqrt(agg[k]) * 0.6) * dpr;
+        ctx.stroke();
+      });
+    })();
     clusters.forEach(function(c){
       var isSel = (sel && sel.kind === 'cluster' && sel.key === c.key);
       var isH = (hover && hover.kind === 'cluster' && hover.key === c.key);
@@ -1536,7 +1611,7 @@ function draw(){
       ctx.strokeStyle = isS ? '#fff' : (dark ? 'rgba(255,255,255,0.7)' : '#1e293b');
       ctx.stroke();
 
-      // Adaptive Label Display
+      // Adaptive Label Display: Only show when zoomed in or hovered/selected
       var showLabel = false;
       if (isS || isH) {
         showLabel = true;
@@ -1547,10 +1622,8 @@ function draw(){
       } else if (labelSetting === 'connected') {
         showLabel = isDirect && (n.inn > 0 || n.out > 0);
       } else {
-        // Smart mode: important hubs always show label
-        if ((n.inn + n.out >= 3) || (n.pr && n.pr > 0.001) || n.r >= 13) showLabel = true;
-        else if (s > 0.35 && (n.inn > 0 || n.out > 0)) showLabel = true;
-        else if (s > 0.65) showLabel = true;
+        // Default: labels ONLY appear when zoomed in close enough (s >= 0.85)
+        showLabel = (s >= 0.85);
       }
 
       if (showLabel) {
@@ -1632,7 +1705,7 @@ function draw(){
       ctx.strokeStyle = isS ? '#fff' : (dark ? 'rgba(255,255,255,0.8)' : '#0f172a');
       ctx.stroke();
 
-      // Adaptive Symbol Label Display
+      // Adaptive Symbol Label Display: Only show when zoomed in or hovered/selected
       var showLabel = false;
       if (isS || isH) {
         showLabel = true;
@@ -1643,10 +1716,8 @@ function draw(){
       } else if (labelSetting === 'connected') {
         showLabel = isDirect && (n.inn > 0 || n.out > 0);
       } else {
-        // Smart mode:
-        if ((n.inn + n.out >= 3) || (n.pr && n.pr > 0.001) || base >= 12) showLabel = true;
-        else if (s > 0.45 && (n.inn > 0 || n.out > 0)) showLabel = true;
-        else if (s > 0.8) showLabel = true;
+        // Default: labels ONLY appear when zoomed in close enough (s >= 0.95)
+        showLabel = (s >= 0.95);
       }
 
       if (showLabel) {
@@ -1774,30 +1845,440 @@ function updateSidePanel(p){
   }
 }
 
+function getShortName(p) {
+  if (!p) return '';
+  var parts = p.split('/');
+  return parts[parts.length - 1] || p;
+}
+
+var isLabelsVisible = false;
+
+function updateVisLabels(force) {
+  if (!useVis || !visNetwork || !visNodesDS) return;
+  var scale = visNetwork.getScale();
+  var shouldShow = false;
+  if (labelSetting === 'always') {
+    shouldShow = true;
+  } else if (labelSetting === 'hover') {
+    shouldShow = false;
+  } else {
+    // Zoom threshold: labels ONLY appear when zoomed in close enough
+    var threshold = (mode === 'symbol' ? 0.95 : 0.85);
+    shouldShow = (scale >= threshold);
+  }
+
+  if (shouldShow === isLabelsVisible && !force) return;
+  isLabelsVisible = shouldShow;
+
+  var updates = [];
+  visNodesDS.forEach(function(item) {
+    var isSel = sel && ((sel.kind === 'file' && sel.id === item.id) || (sel.kind === 'symbol' && sel.id === item.id) || (sel.kind === 'cluster' && sel.key === item.id));
+    var isHov = hover && ((hover.kind === 'file' && hover.id === item.id) || (hover.kind === 'symbol' && hover.id === item.id) || (hover.kind === 'cluster' && hover.key === item.id));
+    var targetLabel = (shouldShow || isSel || isHov) ? item.fullLabel : '';
+    if (item.label !== targetLabel) {
+      updates.push({ id: item.id, label: targetLabel });
+    }
+  });
+  if (updates.length > 0) {
+    visNodesDS.update(updates);
+  }
+}
+
+function syncVisData() {
+  if (!useVis || !visNodesDS || !visEdgesDS) return;
+  var dark = isDark();
+
+  var rawNodes = [];
+  var rawEdges = [];
+
+  if (mode === 'cluster') {
+    clusters.forEach(function(c) {
+      if (!match(c)) return;
+      var isS = sel && sel.kind === 'cluster' && sel.key === c.key;
+      var isH = hover && hover.kind === 'cluster' && hover.key === c.key;
+      var col = hashColor(c.name || c.key);
+      var lbl = c.name + ' (' + c.members.length + ')';
+      rawNodes.push({
+        id: c.key,
+        fullLabel: lbl,
+        label: lbl,
+        shape: 'dot',
+        size: Math.max(20, Math.min(50, 16 + Math.sqrt(c.members.length) * 5)),
+        x: c.x,
+        y: c.y,
+        color: {
+          background: isS ? '#0ea5e9' : (isH ? '#f59e0b' : col),
+          border: isS ? '#ffffff' : (dark ? 'rgba(255,255,255,0.7)' : 'rgba(0,0,0,0.5)'),
+          highlight: { background: '#0ea5e9', border: '#ffffff' },
+          hover: { background: '#38bdf8', border: '#ffffff' }
+        },
+        borderWidth: isS ? 3.5 : 2,
+        font: {
+          color: isS ? '#38bdf8' : (dark ? '#f8fafc' : '#0f172a'),
+          size: 13,
+          face: 'system-ui, sans-serif',
+          strokeWidth: 3,
+          strokeColor: dark ? 'rgba(9, 13, 22, 0.95)' : 'rgba(255, 255, 255, 0.95)'
+        },
+        shadow: { enabled: true, color: 'rgba(0,0,0,0.35)', size: 10, x: 0, y: 3 }
+      });
+    });
+
+    var clusterEdgeMap = {};
+    var clusterSelfCount = {};
+    fedges.forEach(function(e) {
+      var a = byFileId[e.a], b = byFileId[e.b];
+      if (!a || !b) return;
+      var cA = a.cluster >= 0 ? ('c' + a.cluster) : ('m:' + a.module);
+      var cB = b.cluster >= 0 ? ('c' + b.cluster) : ('m:' + b.module);
+      if (cA === cB) {
+        // Intra-community: jangan dibuang — akumulasi agar bubble raksasa
+        // tetap menunjukkan konektivitas (dirender sebagai self-loop di vis).
+        clusterSelfCount[cA] = (clusterSelfCount[cA] || 0) + (e.n || 1);
+        return;
+      }
+      var pairKey = cA < cB ? (cA + '|' + cB) : (cB + '|' + cA);
+      if (!clusterEdgeMap[pairKey]) clusterEdgeMap[pairKey] = { a: cA, b: cB, count: 0 };
+      clusterEdgeMap[pairKey].count += (e.n || 1);
+    });
+
+    Object.keys(clusterEdgeMap).forEach(function(k) {
+      var ce = clusterEdgeMap[k];
+      rawEdges.push({
+        id: k,
+        from: ce.a,
+        to: ce.b,
+        width: Math.min(4, 1 + Math.sqrt(ce.count) * 0.8),
+        color: {
+          color: dark ? 'rgba(148, 163, 184, 0.25)' : 'rgba(100, 116, 139, 0.3)',
+          highlight: '#38bdf8',
+          hover: '#67e8f9'
+        },
+        smooth: { type: 'continuous', roundness: 0.2 }
+      });
+    });
+    // Self-loop untuk komunitas dengan edge internal dominan (kasus 95 file di 1 cluster).
+    Object.keys(clusterSelfCount).forEach(function(ck) {
+      rawEdges.push({
+        id: ck + '|self',
+        from: ck,
+        to: ck,
+        width: Math.min(4, 1 + Math.sqrt(clusterSelfCount[ck]) * 0.6),
+        color: {
+          color: dark ? 'rgba(148, 163, 184, 0.35)' : 'rgba(100, 116, 139, 0.4)',
+          highlight: '#38bdf8',
+          hover: '#67e8f9'
+        },
+        smooth: { type: 'curvedCW', roundness: 0.6 }
+      });
+    });
+
+  } else if (mode === 'file') {
+    var curScale = visNetwork ? visNetwork.getScale() : 1.0;
+    var showAllLabels = (labelSetting === 'always') || (labelSetting === 'zoom' && curScale >= 0.85);
+
+    files.forEach(function(n) {
+      if (!match(n)) return;
+      var isS = sel && sel.kind === 'file' && sel.id === n.id;
+      var isH = hover && hover.kind === 'file' && hover.id === n.id;
+      var shortF = getShortName(n.file);
+      var shouldShowLabel = showAllLabels || isS || isH;
+      var col = getFileColor(n, isS, isH);
+
+      rawNodes.push({
+        id: n.id,
+        fullLabel: shortF,
+        label: shouldShowLabel ? shortF : '',
+        title: n.file + '\\n' + n.symbols + ' symbols · In: ' + n.inn + ' · Out: ' + n.out,
+        shape: 'dot',
+        size: Math.max(9, Math.min(32, 7 + Math.sqrt(n.symbols || 1) * 2.8 + (n.pr ? n.pr * 120 : 0))),
+        x: n.x,
+        y: n.y,
+        color: {
+          background: col,
+          border: isS ? '#ffffff' : (dark ? 'rgba(255,255,255,0.7)' : 'rgba(15,23,42,0.5)'),
+          highlight: { background: '#38bdf8', border: '#ffffff' },
+          hover: { background: '#f59e0b', border: '#ffffff' }
+        },
+        borderWidth: isS ? 3.5 : (isH ? 2.5 : 1.5),
+        font: {
+          color: isS ? '#38bdf8' : (isH ? '#f59e0b' : (dark ? '#f8fafc' : '#0f172a')),
+          size: 11.5,
+          face: 'ui-monospace, monospace',
+          strokeWidth: 3,
+          strokeColor: dark ? 'rgba(9, 13, 22, 0.95)' : 'rgba(255, 255, 255, 0.95)'
+        },
+        shadow: { enabled: true, color: 'rgba(0,0,0,0.3)', size: 8, x: 0, y: 2 }
+      });
+    });
+
+    fedges.forEach(function(e) {
+      var a = byFileId[e.a], b = byFileId[e.b];
+      if (!a || !b || !match(a) || !match(b)) return;
+      if (relF && e.rel !== relF) return;
+
+      var isEdgeActive = !sel || (sel.kind === 'file' && (sel.id === a.id || sel.id === b.id));
+      if (sel && !isEdgeActive) return;
+
+      rawEdges.push({
+        id: e.a + '_' + e.b + '_' + e.rel,
+        from: e.a,
+        to: e.b,
+        arrows: { to: { enabled: true, scaleFactor: 0.55 } },
+        width: (isEdgeActive && sel ? 2.5 : Math.min(3, 0.8 + (e.n || 1) * 0.3)),
+        color: {
+          color: edgeColor(e.rel, isEdgeActive, e.conf),
+          highlight: '#38bdf8',
+          hover: '#67e8f9'
+        },
+        dashes: e.conf < 0.8,
+        smooth: { type: 'continuous', roundness: 0.15 }
+      });
+    });
+
+  } else {
+    // symbol mode
+    var curScale = visNetwork ? visNetwork.getScale() : 1.0;
+    var showAllLabels = (labelSetting === 'always') || (labelSetting === 'zoom' && curScale >= 0.95);
+
+    syms.forEach(function(s) {
+      if (!match(s)) return;
+      var isS = sel && sel.kind === 'symbol' && sel.id === s.id;
+      var isH = hover && hover.kind === 'symbol' && hover.id === s.id;
+      var shouldShowLabel = showAllLabels || isS || isH;
+      var col = getSymbolColor(s, isS, isH);
+      var conn = s.inn * 1.8 + s.out * 0.9;
+      var base = Math.min(26, Math.max(6, 5 + Math.sqrt(conn) * 2.2 + (s.pr * 400)));
+
+      rawNodes.push({
+        id: s.id,
+        fullLabel: s.name,
+        label: shouldShowLabel ? s.name : '',
+        title: s.name + ' (' + s.type + ')\\n' + s.file + '\\nPageRank: ' + (s.pr ? (s.pr * 100).toFixed(2) + '%' : '—'),
+        shape: (s.type === 'class' || s.type === 'interface') ? 'diamond' : (s.type === 'route' ? 'triangle' : 'dot'),
+        size: base,
+        x: s.x,
+        y: s.y,
+        color: {
+          background: col,
+          border: isS ? '#ffffff' : (dark ? 'rgba(255,255,255,0.7)' : 'rgba(15,23,42,0.5)'),
+          highlight: { background: '#38bdf8', border: '#ffffff' },
+          hover: { background: '#f59e0b', border: '#ffffff' }
+        },
+        borderWidth: isS ? 3.5 : (isH ? 2.5 : 1.5),
+        font: {
+          color: isS ? '#38bdf8' : (isH ? '#f59e0b' : (dark ? '#f8fafc' : '#0f172a')),
+          size: 11,
+          face: 'ui-monospace, monospace',
+          strokeWidth: 3,
+          strokeColor: dark ? 'rgba(9, 13, 22, 0.95)' : 'rgba(255, 255, 255, 0.95)'
+        },
+        shadow: { enabled: true, color: 'rgba(0,0,0,0.3)', size: 6, x: 0, y: 2 }
+      });
+    });
+
+    var se = {};
+    sedges.forEach(function(e) {
+      var a = bySymId[e.s], b = bySymId[e.t];
+      if (!a || !b || !match(a) || !match(b)) return;
+      if (relF && e.rel !== relF) return;
+
+      var isEdgeActive = !sel || (sel.kind === 'symbol' && (sel.id === a.id || sel.id === b.id));
+      if (sel && !isEdgeActive) return;
+
+      var k = e.s + ':' + e.t;
+      if (se[k]) return;
+      se[k] = 1;
+
+      rawEdges.push({
+        id: k,
+        from: e.s,
+        to: e.t,
+        arrows: { to: { enabled: true, scaleFactor: 0.5 } },
+        width: isEdgeActive && sel ? 2.2 : 1,
+        color: {
+          color: edgeColor(e.rel, isEdgeActive, 1.0),
+          highlight: '#38bdf8',
+          hover: '#67e8f9'
+        },
+        smooth: { type: 'continuous', roundness: 0.15 }
+      });
+    });
+  }
+
+  visNodesDS.clear();
+  visNodesDS.add(rawNodes);
+  visEdgesDS.clear();
+  visEdgesDS.add(rawEdges);
+}
+
+function initVis() {
+  if (!useVis) return;
+  document.body.classList.add('use-vis');
+
+  visNodesDS = new vis.DataSet([]);
+  visEdgesDS = new vis.DataSet([]);
+
+  var container = document.getElementById('vis-net');
+  var data = { nodes: visNodesDS, edges: visEdgesDS };
+
+  var options = {
+    autoResize: true,
+    nodes: {
+      borderWidth: 2,
+      shadow: true
+    },
+    edges: {
+      smooth: { type: 'continuous', roundness: 0.15 },
+      hoverWidth: 1.5,
+      selectionWidth: 2
+    },
+    interaction: {
+      hover: true,
+      hoverConnectedEdges: true,
+      selectConnectedEdges: true,
+      multiselect: false,
+      navigationButtons: false,
+      keyboard: false,
+      tooltipDelay: 120
+    },
+    physics: {
+      enabled: true,
+      solver: 'forceAtlas2Based',
+      forceAtlas2Based: {
+        gravitationalConstant: -35,
+        centralGravity: 0.005,
+        springLength: 90,
+        springConstant: 0.15,
+        damping: 0.7,
+        avoidOverlap: 0.4
+      },
+      stabilization: {
+        enabled: true,
+        iterations: 40,
+        updateInterval: 10
+      }
+    }
+  };
+
+  visNetwork = new vis.Network(container, data, options);
+
+  syncVisData();
+  visNetwork.fit();
+
+  visNetwork.on('zoom', function() {
+    updateVisLabels(false);
+  });
+
+  visNetwork.on('hoverNode', function(params) {
+    var id = params.node;
+    if (mode === 'cluster') hover = { kind: 'cluster', key: id };
+    else if (mode === 'file') hover = { kind: 'file', id: id };
+    else hover = { kind: 'symbol', id: id };
+    var item = visNodesDS.get(id);
+    if (item && !isLabelsVisible) {
+      visNodesDS.update({ id: id, label: item.fullLabel });
+    }
+  });
+
+  visNetwork.on('blurNode', function(params) {
+    var id = params.node;
+    var item = visNodesDS.get(id);
+    var isSel = sel && ((sel.kind === 'file' && sel.id === id) || (sel.kind === 'symbol' && sel.id === id) || (sel.kind === 'cluster' && sel.key === id));
+    if (item && !isLabelsVisible && !isSel) {
+      visNodesDS.update({ id: id, label: '' });
+    }
+    hover = null;
+  });
+
+  visNetwork.on('selectNode', function(params) {
+    if (params.nodes.length > 0) {
+      var id = params.nodes[0];
+      if (mode === 'cluster') sel = { kind: 'cluster', key: id };
+      else if (mode === 'file') sel = { kind: 'file', id: id };
+      else sel = { kind: 'symbol', id: id };
+      updateSidePanel(sel);
+      var item = visNodesDS.get(id);
+      if (item && item.label !== item.fullLabel) {
+        visNodesDS.update({ id: id, label: item.fullLabel });
+      }
+    }
+  });
+
+  visNetwork.on('deselectNode', function() {
+    sel = null;
+    updateSidePanel(null);
+    updateVisLabels(true);
+  });
+
+  visNetwork.on('click', function(params) {
+    if (params.nodes.length === 0) {
+      sel = null;
+      updateSidePanel(null);
+      updateVisLabels(true);
+    }
+  });
+
+  visNetwork.on('doubleClick', function(params) {
+    if (params.nodes.length > 0) {
+      var id = params.nodes[0];
+      visNetwork.focus(id, {
+        scale: 1.6,
+        animation: { duration: 400, easingFunction: 'easeInOutQuad' }
+      });
+    }
+  });
+}
+
 window.__selectNode = function(kind, id) {
   if (kind === 'file') {
     mode = 'file';
     document.querySelectorAll('.seg button').forEach(function(b){ b.classList.toggle('on', b.dataset.mode === 'file'); });
     var n = byFileId[id];
-    if (n) { sel = { kind: 'file', id: id }; updateSidePanel(sel); centerOn(n.x, n.y, 1.8); }
+    if (n) {
+      sel = { kind: 'file', id: id };
+      updateSidePanel(sel);
+      if (useVis && visNetwork) {
+        syncVisData();
+        visNetwork.selectNodes([id]);
+        visNetwork.focus(id, { scale: 1.5, animation: { duration: 400, easingFunction: 'easeInOutQuad' } });
+        updateVisLabels(true);
+      } else {
+        centerOn(n.x, n.y, 1.8);
+      }
+    }
   } else if (kind === 'symbol') {
     mode = 'symbol';
     document.querySelectorAll('.seg button').forEach(function(b){ b.classList.toggle('on', b.dataset.mode === 'symbol'); });
     var s = bySymId[id];
-    if (s) { sel = { kind: 'symbol', id: id }; updateSidePanel(sel); centerOn(s.x, s.y, 2.2); }
+    if (s) {
+      sel = { kind: 'symbol', id: id };
+      updateSidePanel(sel);
+      if (useVis && visNetwork) {
+        syncVisData();
+        visNetwork.selectNodes([id]);
+        visNetwork.focus(id, { scale: 1.8, animation: { duration: 400, easingFunction: 'easeInOutQuad' } });
+        updateVisLabels(true);
+      } else {
+        centerOn(s.x, s.y, 2.2);
+      }
+    }
   }
 };
 
 wrap.addEventListener('mousedown', function(e){
+  if (useVis && visNetwork) return;
   if (e.button !== 0) return;
   drag = { clientX: e.clientX, clientY: e.clientY, camX: cam.x, camY: cam.y, moved: false };
   wrap.style.cursor = 'grabbing';
 });
 window.addEventListener('mouseup', function(){
+  if (useVis && visNetwork) return;
   drag = null;
   wrap.style.cursor = 'grab';
 });
 window.addEventListener('mousemove', function(e){
+  if (useVis && visNetwork) return;
   var r = wrap.getBoundingClientRect();
   if (drag) {
     var dx = e.clientX - drag.clientX;
@@ -1835,6 +2316,7 @@ window.addEventListener('mousemove', function(e){
 });
 
 wrap.addEventListener('click', function(e){
+  if (useVis && visNetwork) return;
   if (drag && drag.moved) return;
   var r = wrap.getBoundingClientRect();
   var p = pick(e.clientX - r.left, e.clientY - r.top);
@@ -1844,6 +2326,7 @@ wrap.addEventListener('click', function(e){
 });
 
 wrap.addEventListener('dblclick', function(e){
+  if (useVis && visNetwork) return;
   var r = wrap.getBoundingClientRect();
   var p = pick(e.clientX - r.left, e.clientY - r.top);
   if (p) {
@@ -1853,6 +2336,7 @@ wrap.addEventListener('dblclick', function(e){
 });
 
 wrap.addEventListener('wheel', function(e){
+  if (useVis && visNetwork) return;
   e.preventDefault();
   var r = wrap.getBoundingClientRect();
   var mx = e.clientX - r.left;
@@ -1864,6 +2348,7 @@ wrap.addEventListener('wheel', function(e){
 // Touch pinch-to-zoom & pan
 var touchState = null;
 wrap.addEventListener('touchstart', function(e){
+  if (useVis && visNetwork) return;
   if (e.touches.length === 1) {
     var t = e.touches[0];
     touchState = { mode: 'pan', x: t.clientX, y: t.clientY, camX: cam.x, camY: cam.y };
@@ -1879,6 +2364,7 @@ wrap.addEventListener('touchstart', function(e){
 }, { passive: true });
 
 wrap.addEventListener('touchmove', function(e){
+  if (useVis && visNetwork) return;
   if (!touchState) return;
   if (e.touches.length === 1 && touchState.mode === 'pan') {
     var t = e.touches[0];
@@ -1900,13 +2386,19 @@ wrap.addEventListener('touchmove', function(e){
 }, { passive: true });
 
 wrap.addEventListener('touchend', function(){
+  if (useVis && visNetwork) return;
   touchState = null;
 });
 
 document.getElementById('btn-clear-focus').addEventListener('click', function(){
   sel = null;
   updateSidePanel(null);
-  draw();
+  if (useVis && visNetwork) {
+    visNetwork.unselectAll();
+    updateVisLabels(true);
+  } else {
+    draw();
+  }
 });
 
 // Mode buttons
@@ -1917,42 +2409,99 @@ document.querySelectorAll('.seg button').forEach(function(b){
     mode = b.dataset.mode;
     sel = null;
     updateSidePanel(null);
-    fit();
+    if (useVis && visNetwork) {
+      syncVisData();
+      visNetwork.fit({ animation: { duration: 350, easingFunction: 'easeInOutQuad' } });
+    } else {
+      fit();
+    }
   });
 });
 
 // Search & filters
 var q = document.getElementById('q');
-q.addEventListener('input', function(){ query = q.value.toLowerCase(); draw(); });
+q.addEventListener('input', function(){
+  query = q.value.toLowerCase();
+  if (useVis && visNetwork) {
+    syncVisData();
+  } else {
+    draw();
+  }
+});
+
 var tf = document.getElementById('tf');
-tf.addEventListener('change', function(){
+if (tf) tf.addEventListener('change', function(){
   typeF = tf.value;
   if (mode !== 'symbol' && typeF) {
     mode = 'symbol';
     document.querySelectorAll('.seg button').forEach(function(x){ x.classList.toggle('on', x.dataset.mode === mode); });
   }
-  draw();
+  if (useVis && visNetwork) {
+    syncVisData();
+  } else {
+    draw();
+  }
 });
 
 var cm = document.getElementById('cm');
-if (cm) cm.addEventListener('change', function(){ colorSetting = cm.value; draw(); });
+if (cm) cm.addEventListener('change', function(){
+  colorSetting = cm.value;
+  if (useVis && visNetwork) {
+    syncVisData();
+  } else {
+    draw();
+  }
+});
 
 var lm = document.getElementById('lm');
-if (lm) lm.addEventListener('change', function(){ labelSetting = lm.value; draw(); });
+if (lm) lm.addEventListener('change', function(){
+  labelSetting = lm.value;
+  if (useVis && visNetwork) {
+    updateVisLabels(true);
+  } else {
+    draw();
+  }
+});
 
 var ef = document.getElementById('ef');
-if (ef) ef.addEventListener('change', function(){ relF = ef.value; draw(); });
+if (ef) ef.addEventListener('change', function(){
+  relF = ef.value;
+  if (useVis && visNetwork) {
+    syncVisData();
+  } else {
+    draw();
+  }
+});
 
-// HUD actions
-document.getElementById('fit').addEventListener('click', fit);
-document.getElementById('hud-fit').addEventListener('click', fit);
+// HUD actions & Fit
+function handleFit() {
+  if (useVis && visNetwork) {
+    visNetwork.fit({ animation: { duration: 400, easingFunction: 'easeInOutQuad' } });
+    setTimeout(function(){ updateVisLabels(true); }, 450);
+  } else {
+    fit();
+  }
+}
+document.getElementById('fit').addEventListener('click', handleFit);
+document.getElementById('hud-fit').addEventListener('click', handleFit);
+
 document.getElementById('hud-zoom-in').addEventListener('click', function(){
-  var r = wrap.getBoundingClientRect();
-  zoomAt(r.width / 2, r.height / 2, 1.3);
+  if (useVis && visNetwork) {
+    visNetwork.moveTo({ scale: visNetwork.getScale() * 1.3 });
+    updateVisLabels(false);
+  } else {
+    var r = wrap.getBoundingClientRect();
+    zoomAt(r.width / 2, r.height / 2, 1.3);
+  }
 });
 document.getElementById('hud-zoom-out').addEventListener('click', function(){
-  var r = wrap.getBoundingClientRect();
-  zoomAt(r.width / 2, r.height / 2, 0.77);
+  if (useVis && visNetwork) {
+    visNetwork.moveTo({ scale: visNetwork.getScale() * 0.77 });
+    updateVisLabels(false);
+  } else {
+    var r = wrap.getBoundingClientRect();
+    zoomAt(r.width / 2, r.height / 2, 0.77);
+  }
 });
 
 // Minimap toggle & click-to-pan
@@ -1981,7 +2530,11 @@ document.getElementById('btn-theme').addEventListener('click', function(){
   darkTheme = !darkTheme;
   document.documentElement.setAttribute('data-theme', darkTheme ? 'dark' : 'light');
   this.textContent = darkTheme ? '🌙 Theme' : '☀️ Theme';
-  draw();
+  if (useVis && visNetwork) {
+    syncVisData();
+  } else {
+    draw();
+  }
 });
 
 // Side drawer toggle
@@ -2005,45 +2558,102 @@ window.addEventListener('keydown', function(e){
     q.focus();
   } else if (e.key === 'Escape') {
     if (modal.style.display === 'flex') modal.style.display = 'none';
-    else if (sel) { sel = null; updateSidePanel(null); draw(); }
-    else if (q.value) { q.value = ''; query = ''; draw(); }
+    else if (sel) {
+      sel = null;
+      updateSidePanel(null);
+      if (useVis && visNetwork) {
+        visNetwork.unselectAll();
+        updateVisLabels(true);
+      } else {
+        draw();
+      }
+    } else if (q.value) {
+      q.value = '';
+      query = '';
+      if (useVis && visNetwork) syncVisData();
+      else draw();
+    }
   } else if (e.key === '1' && document.activeElement !== q) {
     mode = 'cluster';
     document.querySelectorAll('.seg button').forEach(function(b){ b.classList.toggle('on', b.dataset.mode === 'cluster'); });
-    fit();
+    sel = null; updateSidePanel(null);
+    if (useVis && visNetwork) { syncVisData(); visNetwork.fit({ animation: { duration: 300, easingFunction: 'easeInOutQuad' } }); }
+    else fit();
   } else if (e.key === '2' && document.activeElement !== q) {
     mode = 'file';
     document.querySelectorAll('.seg button').forEach(function(b){ b.classList.toggle('on', b.dataset.mode === 'file'); });
-    fit();
+    sel = null; updateSidePanel(null);
+    if (useVis && visNetwork) { syncVisData(); visNetwork.fit({ animation: { duration: 300, easingFunction: 'easeInOutQuad' } }); }
+    else fit();
   } else if (e.key === '3' && document.activeElement !== q) {
     mode = 'symbol';
     document.querySelectorAll('.seg button').forEach(function(b){ b.classList.toggle('on', b.dataset.mode === 'symbol'); });
-    fit();
+    sel = null; updateSidePanel(null);
+    if (useVis && visNetwork) { syncVisData(); visNetwork.fit({ animation: { duration: 300, easingFunction: 'easeInOutQuad' } }); }
+    else fit();
   } else if ((e.key === 'f' || e.key === 'F') && document.activeElement !== q) {
-    fit();
+    handleFit();
   } else if ((e.key === '+' || e.key === '=') && document.activeElement !== q) {
-    var r = wrap.getBoundingClientRect();
-    zoomAt(r.width / 2, r.height / 2, 1.25);
+    if (useVis && visNetwork) {
+      visNetwork.moveTo({ scale: visNetwork.getScale() * 1.25 });
+      updateVisLabels(false);
+    } else {
+      var r = wrap.getBoundingClientRect();
+      zoomAt(r.width / 2, r.height / 2, 1.25);
+    }
   } else if ((e.key === '-' || e.key === '_') && document.activeElement !== q) {
-    var r = wrap.getBoundingClientRect();
-    zoomAt(r.width / 2, r.height / 2, 0.8);
+    if (useVis && visNetwork) {
+      visNetwork.moveTo({ scale: visNetwork.getScale() * 0.8 });
+      updateVisLabels(false);
+    } else {
+      var r = wrap.getBoundingClientRect();
+      zoomAt(r.width / 2, r.height / 2, 0.8);
+    }
   } else if ((e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') && document.activeElement !== q) {
-    cam.x -= 40 / cam.scale;
-    draw();
+    if (useVis && visNetwork) {
+      visNetwork.moveTo({ position: { x: visNetwork.getViewPosition().x - 40, y: visNetwork.getViewPosition().y } });
+    } else {
+      cam.x -= 40 / cam.scale;
+      draw();
+    }
   } else if ((e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') && document.activeElement !== q) {
-    cam.x += 40 / cam.scale;
-    draw();
+    if (useVis && visNetwork) {
+      visNetwork.moveTo({ position: { x: visNetwork.getViewPosition().x + 40, y: visNetwork.getViewPosition().y } });
+    } else {
+      cam.x += 40 / cam.scale;
+      draw();
+    }
   } else if ((e.key === 'ArrowUp' || e.key === 'w' || e.key === 'W') && document.activeElement !== q) {
-    cam.y -= 40 / cam.scale;
-    draw();
+    if (useVis && visNetwork) {
+      visNetwork.moveTo({ position: { x: visNetwork.getViewPosition().x, y: visNetwork.getViewPosition().y - 40 } });
+    } else {
+      cam.y -= 40 / cam.scale;
+      draw();
+    }
   } else if ((e.key === 'ArrowDown' || e.key === 's' || e.key === 'S') && document.activeElement !== q) {
-    cam.y += 40 / cam.scale;
-    draw();
+    if (useVis && visNetwork) {
+      visNetwork.moveTo({ position: { x: visNetwork.getViewPosition().x, y: visNetwork.getViewPosition().y + 40 } });
+    } else {
+      cam.y += 40 / cam.scale;
+      draw();
+    }
   }
 });
 
-resize();
-fit();
+if (useVis) {
+  try {
+    initVis();
+  } catch (err) {
+    console.warn('vis-network init failed, falling back to canvas:', err);
+    useVis = false;
+    document.body.classList.remove('use-vis');
+    resize();
+    fit();
+  }
+} else {
+  resize();
+  fit();
+}
 })();
 </script>
 </body>

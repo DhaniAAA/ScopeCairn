@@ -16,6 +16,7 @@ function latestVersion(): string | null {
 }
 
 export function cmdUpdate(opts: { check?: boolean } = {}): void {
+  console.log("Catatan: `scopecairn update` deprecated — gunakan `npm i -g scopecairn@latest`.");
   const current = (pkg as { version: string }).version;
   const latest = latestVersion();
   if (!latest) {

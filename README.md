@@ -74,8 +74,7 @@ Requires Node.js ≥ 20.
 Upgrade later with:
 
 ```bash
-scopecairn update          # or: npm install -g scopecairn@latest
-scopecairn update --check  # only check for a new version
+npm install -g scopecairn@latest
 ```
 
 ## Agent-driven setup
@@ -154,12 +153,11 @@ ScopeCairn organizes its capabilities into **6 core commands** aligned with code
 | ------- | ----------- |
 | `init [path]` | Initial indexing + Skill, Workflow, detected agent skills (`--agents …\|all`). |
 | `read symbol <name>` | Symbol-level source excerpt (not whole files). |
-| `benchmark [--tune]` | Retrieval recall, irrelevant ratio, context reduction + weight tuning. |
-| `update [--check]` | Update ScopeCairn to latest npm release. |
+| `benchmark [--tune]` | Retrieval recall, irrelevant ratio, context reduction + weight tuning (dev-only, hidden from `--help`). |
 | `<agent> install` | Agent installers: `antigravity`, `claude`, `cursor`, `windsurf`, `copilot`, `kiro`, `opencode`. |
 
 > [!NOTE]
-> **Backward Compatibility:** All previous standalone commands (`rebuild`, `clean`, `watch`, `doctor`, `dashboard`, `test-select`, `path`, `export`, `diff`, `arch-check`, `history`) are preserved as aliases mapped directly into these 6 core commands.
+> **Backward Compatibility:** All previous standalone commands (`rebuild`, `clean`, `watch`, `doctor`, `dashboard`, `test-select`, `path`, `export`, `diff`, `arch-check`, `history`) are preserved as hidden aliases mapped directly into these 6 core commands — they still work but no longer appear in `--help`. `update` is deprecated (use `npm install -g scopecairn@latest`).
 
 Agent commands (`context`, `impact`, `read`, `graph`, `status`, `verify`)
 are read-only toward source code and safe to allowlist. `init` and `scan`

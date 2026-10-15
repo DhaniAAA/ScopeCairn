@@ -44,6 +44,11 @@ Helper & Setup Commands:
   $ scopecairn init                      index repo + setup agent integration
   $ scopecairn read symbol indexFileSymbols symbol-level source excerpt
 
+Previous standalone commands (rebuild, clean, watch, doctor, dashboard,
+test-select, path, export, diff, arch-check, history) still work as hidden
+aliases mapped into the commands above. benchmark (dev-only) and update
+(deprecated, use npm) are also hidden from this list.
+
 Agent commands (context, impact, read, graph, status, verify) are
 read-only toward source and only write to .scopecairn/ — safe to allowlist.
 `
@@ -172,7 +177,7 @@ program
   .action((kind: string, name: string, opts: { json?: boolean }) => cmdRead(repoRoot(), kind, name, opts));
 
 program
-  .command("benchmark")
+  .command("benchmark", { hidden: true })
   .description("Retrieval recall, irrelevant ratio, context reduction + weight tuning")
   .option("--tune", "grid search bobot FR-05")
   .option("--no-refresh", "skip incremental refresh (debugging/benchmark)")
@@ -181,77 +186,77 @@ program
   );
 
 program
-  .command("update")
-  .description("Update scopecairn ke versi terbaru dari npm registry")
+  .command("update", { hidden: true })
+  .description("[Deprecated: gunakan `npm i -g scopecairn@latest`] Update scopecairn dari npm registry")
   .option("--check", "hanya cek versi terbaru tanpa menginstall")
   .action((opts: { check?: boolean }) => cmdUpdate(opts));
 
 // ==========================================
-// Backward-Compatibility Aliases
+// Hidden Aliases (tetap berfungsi, tidak tampil di --help)
 // ==========================================
 program
-  .command("rebuild")
+  .command("rebuild", { hidden: true })
   .description("[Alias: `scopecairn scan --rebuild`] Rebuild index from scratch")
   .action(() => cmdScan(repoRoot(), { rebuild: true }));
 
 program
-  .command("clean")
+  .command("clean", { hidden: true })
   .description("[Alias: `scopecairn scan --clean`] Remove local index (.scopecairn)")
   .action(() => cmdScan(repoRoot(), { clean: true }));
 
 program
-  .command("watch")
+  .command("watch", { hidden: true })
   .description("[Alias: `scopecairn scan --watch`] Watch files and refresh index automatically")
   .option("--debounce <ms>", "debounce time in milliseconds (default 300)", parseInt)
   .action((opts: { debounce?: number }) => cmdScan(repoRoot(), { watch: true, debounce: opts.debounce }));
 
 program
-  .command("doctor")
+  .command("doctor", { hidden: true })
   .description("[Alias: `scopecairn status --doctor`] Check integration health")
   .option("--verbose", "print adapter/graph errors to stderr as well")
   .action((opts: { verbose?: boolean }) => cmdStatus(repoRoot(), { doctor: true, verbose: opts.verbose }));
 
 program
-  .command("dashboard")
+  .command("dashboard", { hidden: true })
   .description("[Alias: `scopecairn status --html`] Generate local HTML dashboard")
   .option("--out <path>", "output file")
   .action((opts: { out?: string }) => cmdStatus(repoRoot(), { html: true, out: opts.out }));
 
 program
-  .command("test-select <target>")
+  .command("test-select <target>", { hidden: true })
   .description("[Alias: `scopecairn impact <target> --run-tests`] List and run affected tests")
   .option("--run", "execute the affected test runner command directly")
   .option("--json", "output results as JSON")
   .action((target: string, opts: { run?: boolean; json?: boolean }) => cmdTestSelect(repoRoot(), target, opts));
 
 program
-  .command("path <from> <to>")
+  .command("path <from> <to>", { hidden: true })
   .description("[Alias: `scopecairn graph <from> --to <to>`] Shortest call path between symbols")
   .option("--json", "output results as JSON")
   .action((from: string, to: string, opts: { json?: boolean }) => cmdPath(repoRoot(), from, to, opts));
 
 program
-  .command("export")
+  .command("export", { hidden: true })
   .description("[Alias: `scopecairn graph --export <fmt>`] Export codebase graph")
   .option("--format <fmt>", "export format", "mermaid")
   .option("--out <path>", "output file (default .scopecairn/graph.<ext>)")
   .action((opts: { format: string; out?: string }) => cmdExport(repoRoot(), opts.format, opts.out));
 
 program
-  .command("diff")
+  .command("diff", { hidden: true })
   .description("[Alias: `scopecairn verify --diff`] Structural symbol-level diff vs HEAD")
   .option("--json", "output results as JSON")
   .action((opts: { json?: boolean }) => cmdDiff(repoRoot(), opts));
 
 program
-  .command("arch-check")
+  .command("arch-check", { hidden: true })
   .description("[Alias: `scopecairn verify --arch`] Check architectural layer rules")
   .option("--init", "generate initial .scopecairn/arch.json configuration template")
   .option("--json", "output results as JSON")
   .action((opts: { init?: boolean; json?: boolean }) => cmdArchCheck(repoRoot(), opts));
 
 program
-  .command("history <task>")
+  .command("history <task>", { hidden: true })
   .description("[Alias: `scopecairn context \"<task>\"`] Find analog commits for task")
   .option("--limit <n>", "jumlah analog (default 3, maks 10)", parseInt)
   .option("--json", "output results as JSON")

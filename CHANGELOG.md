@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.12.0 (2026-10-15)
+
+- refactor(cli): konsolidasi 21 command jadi 8 visible - 11 alias + benchmark/update hidden, update deprecated ke npm, README diperbarui (720972f)
+- fix(graph): blank GRAPH.html dan tombol navbar mati - escape newline di template literal, default view Files, filter tipe hanya untuk symbols, edge intra-community jadi self-loop (9c3615d)
+
 ## 0.11.0 (2026-10-14)
 
 - fix(graph): improve node sizing, module coloring, camera controls, and label visibility in visual graph (589c5ec)

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.13.0 (2026-10-16)
+
+- chore(integrate): template sebut decide + regenerasi file dogfood (112b1ee)
+- fix(retrieval): arah edge TESTS di related tests contextBuilder (882941d)
+- feat: command decide, status --usage, verify --dod (073ec67)
+- fix(integrate): workflow Antigravity ke .agents/workflows (hapus legacy root workflows/) (1e5db5c)
+
 ## 0.12.1 (2026-10-16)
 
 - docs: add project branding assets and update README and package configuration (671a813)

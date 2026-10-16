@@ -96,6 +96,32 @@ test("envelope --json memakai key yang sama di jalur ranked dan jalur kosong", (
   }
 });
 
+test("related tests mengikuti arah edge TESTS (test -> file yang diuji)", () => {
+  const db = memDb();
+  db.exec(`
+    INSERT INTO files (id, path, language, hash, size) VALUES
+      (1, 'src/alpha.ts', 'typescript', 'h', 1),
+      (2, 'tests/alpha.test.ts', 'typescript', 'h', 1);
+    INSERT INTO symbols (id, file_id, name, type, signature, start_line, end_line) VALUES
+      (1, 1, 'alpha', 'file', '', 1, 1),
+      (2, 2, 'alpha.test', 'file', '', 1, 1);
+    INSERT INTO relationships (source_id, target_id, relationship_type, weight, confidence, evidence)
+      VALUES (2, 1, 'TESTS', 0.9, 0.8, 'INFERRED');
+  `);
+  try {
+    const result = { ...RESULT, ranked: [sym(1, "alpha", "src/alpha.ts", 0.6)] };
+    const built = buildContext(db, "ubah alpha", result, COMPLEX_CLS, { repoRoot: "." });
+    assert.ok(
+      built.tests.includes("tests/alpha.test.ts"),
+      `test yang menguji file HIGH harus masuk related tests, dapat: ${JSON.stringify(built.tests)}`
+    );
+    // Sisi target edge bukan test: file sumber tidak boleh dilaporkan sebagai test.
+    assert.ok(!built.tests.includes("src/alpha.ts"));
+  } finally {
+    db.close();
+  }
+});
+
 test("resolveEffectiveMode: knowledge tidak pernah di-downgrade ke FAST implisit", () => {
   assert.equal(resolveEffectiveMode("NORMAL", SIMPLE_CLS, false), "FAST");
   assert.equal(resolveEffectiveMode("NORMAL", SIMPLE_CLS, true), "NORMAL");

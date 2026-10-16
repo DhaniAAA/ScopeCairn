@@ -105,6 +105,7 @@ export function buildContext(
   // Related tests: edge TESTS ke file HIGH + 2-hop callers (graph, seperti
   // findAffectedTests) + file *.test.* di kandidat. Tanpa import dari
   // commands/testselect agar lapisan retrieval tetap bersih.
+  // Arah edge: source = file test, target = file yang diuji (lihat linkTests).
   const isTestFileLike = (p: string): boolean =>
     p.includes(".test.") ||
     p.includes(".spec.") ||
@@ -116,16 +117,15 @@ export function buildContext(
     try {
       const rows = db
         .prepare(
-          `SELECT DISTINCT f2.path AS t
+          `SELECT DISTINCT f1.path AS t
            FROM relationships r
            JOIN symbols s1 ON s1.id = r.source_id
            JOIN symbols s2 ON s2.id = r.target_id
            JOIN files f1 ON f1.id = s1.file_id
            JOIN files f2 ON f2.id = s2.file_id
-           WHERE r.relationship_type = 'TESTS'
-             AND (f1.path IN (${ph}) OR f2.path IN (${ph}))`
+           WHERE r.relationship_type = 'TESTS' AND f2.path IN (${ph})`
         )
-        .all(...highFiles, ...highFiles) as { t: string }[];
+        .all(...highFiles) as { t: string }[];
       for (const r of rows) testSet.add(r.t);
     } catch {
       // ignore

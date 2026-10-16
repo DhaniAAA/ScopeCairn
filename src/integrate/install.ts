@@ -1,8 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
-import { MARKER, skillMd, workflowMd, allowlistGuide } from "./templates.js";
+import {
+  MARKER,
+  skillMd,
+  workflowMd,
+  allowlistGuide,
+  knowledgeSkillMd,
+} from "./templates.js";
 import { AGENT_MATRIX, findTarget, type AgentTarget } from "./matrix.js";
-import { detectAgentDir, detectPrefix } from "./detect.js";
+import { detectAgentDir, detectPrefix, extractPrefixUsed } from "./detect.js";
 
 // Installer per-agent: `scopecairn <agent> install|uninstall`.
 // init --agents menumpang fungsi yang sama agar satu sumber kebenaran.
@@ -26,35 +32,57 @@ export function installTarget(
     rel: target.rel,
     how,
   });
+  let how: InstallOutcome["how"];
   if (target.mode === "new") {
     const existed = fs.existsSync(abs);
     fs.mkdirSync(path.dirname(abs), { recursive: true });
     fs.writeFileSync(abs, block.endsWith("\n") ? block : block + "\n");
-    // Tulis file extra (mode: "new" selalu, milik penuh ScopeCairn)
-    for (const e of target.extra ?? []) {
-      const eAbs = path.join(repoRoot, e.rel);
-      fs.mkdirSync(path.dirname(eAbs), { recursive: true });
-      const eBlock = e.render(prefix);
-      fs.writeFileSync(eAbs, eBlock.endsWith("\n") ? eBlock : eBlock + "\n");
-    }
-    return finish(existed ? "updated" : "generated");
-  }
-  if (fs.existsSync(abs)) {
+    how = existed ? "updated" : "generated";
+  } else if (fs.existsSync(abs)) {
     const cur = fs.readFileSync(abs, "utf8");
     if (cur.includes(MARKER)) {
       const { next } = removeManagedBlock(cur, (p) => target.render(p));
       fs.writeFileSync(abs, (next + "\n\n" + block).trimEnd() + "\n");
-      return finish("updated");
+      how = "updated";
+    } else {
+      // Tanpa marker pun bersihkan dulu sisa yatim versi lama agar tak ganda.
+      const { next, changed } = removeManagedBlock(cur, (p) => target.render(p));
+      const base = changed ? next : cur;
+      fs.writeFileSync(abs, (base.trimEnd() + "\n\n" + block).trimEnd() + "\n");
+      how = "extended";
     }
-    // Tanpa marker pun bersihkan dulu sisa yatim versi lama agar tak ganda.
-    const { next, changed } = removeManagedBlock(cur, (p) => target.render(p));
-    const base = changed ? next : cur;
-    fs.writeFileSync(abs, (base.trimEnd() + "\n\n" + block).trimEnd() + "\n");
-    return finish("extended");
+  } else {
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    fs.writeFileSync(abs, block.endsWith("\n") ? block : block + "\n");
+    how = "generated";
   }
-  fs.mkdirSync(path.dirname(abs), { recursive: true });
-  fs.writeFileSync(abs, block.endsWith("\n") ? block : block + "\n");
-  return finish("generated");
+  // File extra (knowledge skill) milik penuh ScopeCairn — ditulis untuk mode
+  // "new" maupun "merge" (pada merge, hanya blok utama yang menumpang file user).
+  writeExtras(repoRoot, target, prefix);
+  return finish(how);
+}
+
+/** Tulis file extra target (knowledge skill) — deterministik, milik ScopeCairn. */
+function writeExtras(repoRoot: string, target: AgentTarget, prefix: string): void {
+  for (const e of target.extra ?? []) {
+    const eAbs = path.join(repoRoot, e.rel);
+    fs.mkdirSync(path.dirname(eAbs), { recursive: true });
+    const eBlock = e.render(prefix);
+    fs.writeFileSync(eAbs, eBlock.endsWith("\n") ? eBlock : eBlock + "\n");
+  }
+}
+
+/** Hapus file extra target; true bila ada yang benar-benar dihapus. */
+function removeExtras(repoRoot: string, target: AgentTarget): boolean {
+  let removed = false;
+  for (const e of target.extra ?? []) {
+    const eAbs = path.join(repoRoot, e.rel);
+    if (!fs.existsSync(eAbs)) continue;
+    fs.rmSync(eAbs, { force: true });
+    pruneEmptyDirs(path.dirname(eAbs), repoRoot);
+    removed = true;
+  }
+  return removed;
 }
 
 /**
@@ -109,18 +137,15 @@ export function uninstallTarget(
     rel: target.rel,
     how,
   });
+  // File extra milik penuh ScopeCairn: selalu dibersihkan lebih dulu, bahkan
+  // bila file utama sudah hilang — jangan tinggalkan sisa yatim.
+  // `how` hanya melaporkan status file UTAMA; extra yang ikut dihapus tidak
+  // boleh membuat klaim "removed" untuk file yang tidak disentuh.
+  removeExtras(repoRoot, target);
   if (!fs.existsSync(abs)) return finish("absent");
   if (target.mode === "new") {
     fs.rmSync(abs, { force: true });
     pruneEmptyDirs(path.dirname(abs), repoRoot);
-    // Hapus file extra juga
-    for (const e of target.extra ?? []) {
-      const eAbs = path.join(repoRoot, e.rel);
-      if (fs.existsSync(eAbs)) {
-        fs.rmSync(eAbs, { force: true });
-        pruneEmptyDirs(path.dirname(eAbs), repoRoot);
-      }
-    }
     return finish("removed");
   }
   const cur = fs.readFileSync(abs, "utf8");
@@ -168,28 +193,63 @@ export function installAntigravity(
   fs.mkdirSync(path.dirname(skillPath), { recursive: true });
   fs.writeFileSync(skillPath, skillMd(prefix));
   out.push(`Skill installed (${path.relative(repoRoot, skillPath)})`);
-  const wfPath = path.join(repoRoot, "workflows", "scopecairn.md");
+  const kPath = antigravityKnowledgeSkillPath(repoRoot);
+  fs.mkdirSync(path.dirname(kPath), { recursive: true });
+  fs.writeFileSync(kPath, knowledgeSkillMd(prefix));
+  out.push(`Knowledge skill installed (${path.relative(repoRoot, kPath)})`);
+  const wfPath = antigravityWorkflowPath(repoRoot);
   fs.mkdirSync(path.dirname(wfPath), { recursive: true });
   fs.writeFileSync(wfPath, workflowMd(prefix));
   out.push(`Workflow installed (${path.relative(repoRoot, wfPath)})`);
   return out;
 }
 
+/** Path skill knowledge Antigravity (installer + doctor dari sumber yang sama). */
+export function antigravityKnowledgeSkillPath(repoRoot: string): string {
+  return path.join(
+    repoRoot,
+    detectAgentDir(repoRoot),
+    "skills",
+    "scopecairn-knowledge",
+    "SKILL.md",
+  );
+}
+
+/** Path workflow Antigravity — di dalam agent dir: `.agents/workflows/scopecairn.md`. */
+export function antigravityWorkflowPath(repoRoot: string): string {
+  return path.join(
+    repoRoot,
+    detectAgentDir(repoRoot),
+    "workflows",
+    "scopecairn.md",
+  );
+}
+
 export function uninstallAntigravity(repoRoot: string): string[] {
   const out: string[] = [];
   for (const dir of [".agents", ".agent"]) {
-    const p = path.join(repoRoot, dir, "skills", "scopecairn", "SKILL.md");
-    if (fs.existsSync(p)) {
+    for (const [name, label] of [
+      ["scopecairn", "Skill"],
+      ["scopecairn-knowledge", "Knowledge skill"],
+    ] as const) {
+      const p = path.join(repoRoot, dir, "skills", name, "SKILL.md");
+      if (!fs.existsSync(p)) continue;
       fs.rmSync(p, { force: true });
       pruneEmptyDirs(path.dirname(p), repoRoot);
-      out.push(`Skill removed (${path.relative(repoRoot, p)})`);
+      out.push(`${label} removed (${path.relative(repoRoot, p)})`);
     }
   }
-  const wf = path.join(repoRoot, "workflows", "scopecairn.md");
-  if (fs.existsSync(wf)) {
+  for (const wf of [
+    path.join(repoRoot, ".agents", "workflows", "scopecairn.md"),
+    path.join(repoRoot, ".agent", "workflows", "scopecairn.md"),
+    // Legacy: versi lama menulis di root `workflows/` — bersihkan saat uninstall.
+    path.join(repoRoot, "workflows", "scopecairn.md"),
+  ]) {
+    if (!fs.existsSync(wf)) continue;
     const text = fs.readFileSync(wf, "utf8");
     if (text.includes("scopecairn")) {
       fs.rmSync(wf, { force: true });
+      pruneEmptyDirs(path.dirname(wf), repoRoot);
       out.push(`Workflow removed (${path.relative(repoRoot, wf)})`);
     } else {
       out.push(`Workflow skipped (bukan milik ScopeCairn)`);
@@ -209,4 +269,52 @@ export function allowlistText(repoRoot: string): string {
 
 export function resolveAgent(id: string): AgentTarget | undefined {
   return findTarget(id);
+}
+
+/** Audit file knowledge (extra) — dipakai doctor. Hanya target yang file
+ *  utamanya terpasang; target yang belum dipasang bukan masalah. */
+export interface KnowledgeAudit {
+  total: number;
+  ok: number;
+  missing: Array<{ agent: string; rel: string }>;
+  prefixIssues: Array<{ agent: string; rel: string; used: string }>;
+}
+
+export function auditKnowledgeFiles(
+  repoRoot: string,
+  targets: AgentTarget[],
+  expectedPrefix: string,
+): KnowledgeAudit {
+  const audit: KnowledgeAudit = { total: 0, ok: 0, missing: [], prefixIssues: [] };
+  for (const t of targets) {
+    let main: string | null = null;
+    try {
+      main = fs.readFileSync(path.join(repoRoot, t.rel), "utf8");
+    } catch {
+      continue; // belum terpasang
+    }
+    // Definisi "terpasang" harus sama dengan loop matrix di doctor: file merge
+    // (mis. copilot-instructions.md milik user) hanya dihitung bila marker ada.
+    if (t.mode === "merge" && !main.includes(MARKER)) continue;
+    for (const e of t.extra ?? []) {
+      audit.total++;
+      let text: string | null = null;
+      try {
+        text = fs.readFileSync(path.join(repoRoot, e.rel), "utf8");
+      } catch {
+        text = null;
+      }
+      if (text === null) {
+        audit.missing.push({ agent: t.id, rel: e.rel });
+        continue;
+      }
+      const used = extractPrefixUsed(text);
+      if (used && used !== expectedPrefix) {
+        audit.prefixIssues.push({ agent: t.id, rel: e.rel, used });
+        continue;
+      }
+      audit.ok++;
+    }
+  }
+  return audit;
 }

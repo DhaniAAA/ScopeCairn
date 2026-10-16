@@ -1,6 +1,9 @@
 // Test Analogi Riwayat: deterministik, in-memory, tanpa git.
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
   parseGitLog,
@@ -20,7 +23,14 @@ import {
   resolveCurrentPath,
   leaveOneOut,
 } from "../src/retrieval/history/search.js";
-import { buildGraphMd, exportJson } from "../src/graph/export.js";
+import {
+  buildGraphMd,
+  exportJson,
+  graphMdPath,
+  readGraphMeta,
+  writeGraphMdIfChanged,
+} from "../src/graph/export.js";
+import { buildHistoryPayload } from "../src/commands/history.js";
 
 const NOW = 1_750_000_000; // detik epoch tetap → deterministik
 
@@ -201,6 +211,111 @@ test("GRAPH.md dan export tidak memuat teks commit", () => {
     assert.ok(!json.includes("aaa1111"));
   } finally {
     db.close();
+  }
+});
+
+test("GRAPH.md freshness: baris hanya saat meta tersedia dan deterministik", () => {
+  const db = memDb();
+  try {
+    addFile(db, 9, "src/x.ts");
+    // Tanpa meta → byte-identik dengan perilaku lama (tanpa baris freshness).
+    const plain = buildGraphMd(db, ".");
+    assert.ok(!plain.includes("> Freshness:"));
+    // Meta eksplisit (tanpa subprocess) → baris deterministik.
+    const meta = { scannedAt: "2026-10-15T09:12:33Z", headSha: "671a813" };
+    const withMeta = buildGraphMd(db, ".", meta);
+    assert.ok(withMeta.includes("> Freshness: scanned 2026-10-15T09:12:33Z · HEAD 671a813"));
+    assert.equal(withMeta, buildGraphMd(db, ".", meta));
+    // Hanya salah satu segmen yang tersedia.
+    const noHead = buildGraphMd(db, ".", { scannedAt: "2026-10-15T09:12:33Z", headSha: null });
+    assert.ok(noHead.includes("> Freshness: scanned 2026-10-15T09:12:33Z"));
+    assert.ok(!noHead.includes("HEAD "));
+    // Meta kosong → tak ada baris.
+    assert.ok(!buildGraphMd(db, ".", { scannedAt: null, headSha: null }).includes("> Freshness:"));
+  } finally {
+    db.close();
+  }
+});
+
+test("buildHistoryPayload: bentuk key identik di jalur sukses dan kosong", () => {
+  const analog = {
+    sha: "aaa1111",
+    shortSha: "aaa1111",
+    ts: NOW,
+    date: "2026-10-01",
+    subject: "feat: refund",
+    files: ["src/a.ts", "src/a.test.ts"],
+    score: 0.5,
+  };
+  const ok = buildHistoryPayload("refund", [analog]);
+  const noIndex = buildHistoryPayload("refund", [], "no_index");
+  const noAnalogs = buildHistoryPayload("refund", [], "no_analogs");
+  const keys = (p: ReturnType<typeof buildHistoryPayload>): string[] =>
+    Object.keys(p).sort();
+  assert.deepEqual(keys(ok), keys(noIndex));
+  assert.deepEqual(keys(noIndex), keys(noAnalogs));
+  assert.equal(ok.empty, false);
+  assert.equal(ok.reason, null);
+  assert.equal(noIndex.empty, true);
+  assert.equal(noIndex.reason, "no_index");
+  assert.equal(noAnalogs.reason, "no_analogs");
+  assert.deepEqual(ok.analogs, [analog]);
+});
+
+test("readGraphMeta membaca last_scan dari meta dan toleran tanpa git", () => {
+  const db = memDb();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "graphmeta-"));
+  try {
+    db.prepare(
+      `INSERT INTO meta(key, value) VALUES ('last_scan', '2026-10-15 09:12:33')`
+    ).run();
+    // Bukan repo git → headSha null, scannedAt tetap terbaca (best-effort).
+    const nonGit = readGraphMeta(db, dir);
+    assert.equal(nonGit.scannedAt, "2026-10-15T09:12:33Z");
+    assert.equal(nonGit.headSha, null);
+    // Di dalam repo git (cwd saat test = root proyek) HEAD terbaca short-sha.
+    if (fs.existsSync(path.join(process.cwd(), ".git"))) {
+      const meta = readGraphMeta(db, ".");
+      assert.match(meta.headSha, /^[0-9a-f]{4,}$/);
+    }
+  } finally {
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("writeGraphMdIfChanged: tidak menulis ulang saat hanya freshness bergeser", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "graphmd-"));
+  const db = memDb();
+  try {
+    addFile(db, 9, "src/x.ts");
+    db.prepare(
+      `INSERT INTO meta(key, value) VALUES ('last_scan', '2026-10-15 09:12:33')`
+    ).run();
+    assert.equal(writeGraphMdIfChanged(db, dir, false), false); // tidak kotor → tidak menulis
+    assert.equal(writeGraphMdIfChanged(db, dir, true), true); // tulisan pertama
+    const p = graphMdPath(dir);
+    const first = fs.readFileSync(p, "utf8");
+    assert.ok(first.includes("> Freshness: scanned 2026-10-15T09:12:33Z"));
+    // Scan kotor lagi tanpa perubahan isi → freshness bergeser, file tidak ditulis.
+    db.prepare(
+      `UPDATE meta SET value = '2026-10-15 10:00:00' WHERE key = 'last_scan'`
+    ).run();
+    assert.equal(writeGraphMdIfChanged(db, dir, true), false);
+    assert.equal(fs.readFileSync(p, "utf8"), first);
+    // Checkout CRLF di Windows tidak dianggap perubahan isi.
+    fs.writeFileSync(p, first.replace(/\n/g, "\r\n"));
+    assert.equal(writeGraphMdIfChanged(db, dir, true), false);
+    assert.equal(fs.readFileSync(p, "utf8"), first.replace(/\n/g, "\r\n"));
+    // Isi graph berubah → ditulis ulang.
+    db.prepare(
+      `INSERT INTO symbols (file_id, name, type, signature, start_line, end_line) VALUES (9, 'y', 'function', '', 1, 1)`
+    ).run();
+    assert.equal(writeGraphMdIfChanged(db, dir, true), true);
+    assert.notEqual(fs.readFileSync(p, "utf8"), first);
+  } finally {
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
   }
 });
 

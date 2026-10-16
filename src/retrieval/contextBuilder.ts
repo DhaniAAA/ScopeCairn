@@ -1,5 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import type { RetrievalResult } from "./retrieve.js";
+import type { RetrievalResult, RankedSymbol } from "./retrieve.js";
 import type { Classification } from "./classify.js";
 import { loadProtectedPatterns, isProtected } from "../scope/protected.js";
 import { computeScope, scopeBlock } from "../scope/scope.js";
@@ -10,12 +10,23 @@ import { demoteHeadings, type ProjectRules } from "../scope/agentsmd.js";
 // Context Builder (PRD FR-06): Markdown ringkas untuk agent.
 // Prioritas §14: buang tak-relevan → dedup → level simbol → ringkas → source on-demand.
 
+export type AgentMode = "NORMAL" | "FAST" | "SAFE" | "AUDIT";
+
+/** Hotspot PageRank terstruktur (dipakai rendering markdown + envelope --json). */
+export interface ContextHotspot {
+  name: string;
+  type: string;
+  file: string;
+  pagerank: number;
+}
+
 export interface BuiltContext {
   markdown: string;
   high: string[];
   medium: string[];
   tests: string[];
   dependencies: string[];
+  hotspots: ContextHotspot[];
 }
 
 export interface HistoryBlock {
@@ -33,8 +44,9 @@ export function buildContext(
 ): BuiltContext {
   const complex = cls.complexity === "COMPLEX" || opts?.escalate === true;
 
-  if (!complex) {
-    // §8.4 SIMPLE: pendek, tanpa ekspansi penuh.
+  if (!complex && !opts?.knowledge) {
+    // §8.4 SIMPLE: pendek, tanpa ekspansi penuh. Mode --knowledge selalu lewat
+    // cabang knowledge di bawah — task SIMPLE justru yang tak boleh kosong.
     const files: string[] = [];
     for (const r of result.ranked) {
       if (!files.includes(r.file)) files.push(r.file);
@@ -53,6 +65,7 @@ export function buildContext(
       medium: [],
       tests: [],
       dependencies: [],
+      hotspots: [],
     };
   }
 
@@ -62,10 +75,13 @@ export function buildContext(
   const highFiles = [...new Set(hi.map((r) => r.file))];
   const medFiles = [...new Set(med.map((r) => r.file))].filter((f) => !highFiles.includes(f));
 
-  // Dependencies: rantai IMPORTS antar file HIGH (maks 10).
+  // Dependencies: rantai IMPORTS/CALLS antar file HIGH (maks 10). Di mode
+  // knowledge, seed jatuh ke MEDIUM saat tak ada HIGH (task SIMPLE) agar
+  // seksi "Kenapa" tidak selalu kosong.
+  const traceSeed = highFiles.length > 0 ? highFiles : opts?.knowledge ? medFiles : [];
   const deps: string[] = [];
-  if (highFiles.length > 0) {
-    const ph = highFiles.map(() => "?").join(",");
+  if (traceSeed.length > 0) {
+    const ph = traceSeed.map(() => "?").join(",");
     try {
       const rows = db
         .prepare(
@@ -79,7 +95,7 @@ export function buildContext(
              AND f1.path IN (${ph}) AND f2.path IN (${ph}) AND f1.path != f2.path
            LIMIT 10`
         )
-        .all(...highFiles, ...highFiles) as { a: string; b: string }[];
+        .all(...traceSeed, ...traceSeed) as { a: string; b: string }[];
       for (const r of rows) deps.push(`${r.a} → ${r.b}`);
     } catch {
       // ignore
@@ -176,9 +192,12 @@ export function buildContext(
   const symLine = (r: (typeof ranked)[number]): string =>
     `- ${r.name} (${r.type}) — \`${r.file}\` [${r.score.toFixed(2)} ${r.reason}]`;
 
+  const hotspotLine = (h: ContextHotspot): string =>
+    `- ${h.name} (${h.type}) — \`${h.file}\` [pr=${h.pagerank.toFixed(4)}]`;
+
   // Graphify Engine: naikkan peringkat kandidat dengan PageRank — simbol yang
   // paling kritis di arsitektur (God objects, hubs) tampil sebagai hotspot.
-  let hotspots: string[] = [];
+  let hotspots: ContextHotspot[] = [];
   let cycleWarn = "";
   try {
     const ids = ranked.slice(0, 20).map((r) => r.id);
@@ -193,9 +212,12 @@ export function buildContext(
         .map((r) => ({ r, boost: r.score + (pr.get(r.id) ?? 0) * 2 }))
         .sort((a, b) => b.boost - a.boost)
         .slice(0, 5);
-      hotspots = boosted.map(
-        (b) => `- ${b.r.name} (${b.r.type}) — \`${b.r.file}\` [pr=${(pr.get(b.r.id) ?? 0).toFixed(4)}]`
-      );
+      hotspots = boosted.map((b) => ({
+        name: b.r.name,
+        type: b.r.type,
+        file: b.r.file,
+        pagerank: pr.get(b.r.id) ?? 0,
+      }));
       // Peringatan siklus: kandidat yang terjerat circular dependency.
       const cycRows = db.prepare(`SELECT nodes_json AS js FROM cycles`).all() as { js: string }[];
       const inCycle = new Set<number>();
@@ -279,22 +301,34 @@ export function buildContext(
   // Sembunyikan Scope Required/Optional + Guard coding, ganti dengan
   // Ringkasan + Kenapa + Cara pakai. Tanpa flag = output lama identik.
   if (opts?.knowledge) {
+    // Task SIMPLE sering tak punya skor >=0.3 — jatuh ke MEDIUM agar Ringkasan
+    // dan Cara pakai tetap berisi (mode knowledge tak boleh kosong).
+    const kFiles = highFiles.length > 0 ? highFiles : medFiles;
+    const kSyms = hi.length > 0 ? hi : med;
+    const alsoMed = highFiles.length > 0 && medFiles.length > 0;
     const mdKnowledge =
       `# Task Context (Knowledge)\n\n## Task\n${task}\n\n` +
       `## Complexity\n${cls.complexity} (${cls.reasons.join("; ")})\n\n` +
       rulesBlock +
       `## Ringkasan\n` +
-      `File relevan: ${highFiles.slice(0, 5).join(", ") || "-"}${medFiles.length > 0 ? ` (lihat juga: ${medFiles.slice(0, 5).join(", ")})` : ""}\n` +
-      `Simbol kunci: ${hi.slice(0, 5).map((r) => `\`${r.name}\``).join(", ") || "-"}\n\n` +
-      `## Kenapa (trace 2-hop)\n${deps.map((d) => `- ${d}`).join("\n") || "-"}\n\n` +
+      `File relevan: ${kFiles.slice(0, 5).join(", ") || "-"}${alsoMed ? ` (lihat juga: ${medFiles.slice(0, 5).join(", ")})` : ""}\n` +
+      `Simbol kunci: ${kSyms.slice(0, 5).map((r) => `\`${r.name}\``).join(", ") || "-"}\n\n` +
+      `## Kenapa (impor/call antar file relevan)\n${deps.map((d) => `- ${d}`).join("\n") || "-"}\n\n` +
       (hotspots.length > 0
-        ? `## Hotspot arsitektur\n${hotspots.join("\n")}\n\n`
+        ? `## Hotspot arsitektur\n${hotspots.map(hotspotLine).join("\n")}\n\n`
         : ``) +
-      `## Cara pakai\n${hi.slice(0, 8).map(symLine).join("\n") || "-"}\n\n` +
+      `## Cara pakai\n${kSyms.slice(0, 8).map(symLine).join("\n") || "-"}\n\n` +
       `## Related Tests\n${tests.map((t) => `- ${t}`).join("\n") || "-"}\n\n` +
       historyBlock +
       cycleWarn;
-    return { markdown: mdKnowledge, high: highFiles, medium: medFiles, tests, dependencies: deps };
+    return {
+      markdown: mdKnowledge,
+      high: highFiles,
+      medium: medFiles,
+      tests,
+      dependencies: deps,
+      hotspots,
+    };
   }
 
   const md =
@@ -305,7 +339,7 @@ export function buildContext(
     `### MEDIUM\n${medFiles.map((f) => `- ${f}`).join("\n") || "-"}\n\n` +
     `## Key Symbols\n${hi.slice(0, 8).map(symLine).join("\n") || "-"}\n\n` +
     (hotspots.length > 0
-      ? `## Critical hotspots (PageRank)\n${hotspots.join("\n")}\n\n`
+      ? `## Critical hotspots (PageRank)\n${hotspots.map(hotspotLine).join("\n")}\n\n`
       : ``) +
     `## Dependencies\n${deps.map((d) => `- ${d}`).join("\n") || "-"}\n\n` +
     `## Related Tests\n${tests.map((t) => `- ${t}`).join("\n") || "-"}\n\n` +
@@ -315,5 +349,79 @@ export function buildContext(
     `\n` +
     guardBlock(extraDoD.length > 0 ? extraDoD : undefined);
 
-  return { markdown: md, high: highFiles, medium: medFiles, tests, dependencies: deps };
+  return { markdown: md, high: highFiles, medium: medFiles, tests, dependencies: deps, hotspots };
+}
+
+/** Routing cost-aware (dipakai cmdContext): SIMPLE + ≤1 file → FAST implisit,
+ *  kecuali mode knowledge — analog "kenapa" + simbol penuh justru dibutuhkan. */
+export function resolveEffectiveMode(
+  mode: AgentMode,
+  cls: Classification,
+  knowledge?: boolean
+): AgentMode {
+  return mode === "NORMAL" && cls.complexity === "SIMPLE" && cls.estimatedFiles <= 1 && !knowledge
+    ? "FAST"
+    : mode;
+}
+
+/** F2 --json: envelope kanonik untuk knowledge/RAG agent. Semua jalur —
+ *  kena ranking maupun kosong — memakai builder ini agar key-nya identik.
+ *  Catatan: `high` kosong dengan `medium` berisi = normal untuk task SIMPLE. */
+export interface ContextPayload {
+  task: string;
+  complexity: "SIMPLE" | "COMPLEX";
+  mode: AgentMode;
+  knowledge: boolean;
+  empty: boolean;
+  reason: "no_index" | "no_symbols" | null;
+  high: string[];
+  medium: string[];
+  tests: string[];
+  dependencies: string[];
+  symbols: Array<{ name: string; type: string; file: string; score: number; reason: string }>;
+  hotspots: ContextHotspot[];
+  analogs: Array<{ sha: string; shortSha: string; date: string; subject: string; score: number }>;
+}
+
+export function buildContextPayload(input: {
+  task: string;
+  cls: Classification;
+  escalate?: boolean;
+  mode: AgentMode;
+  knowledge?: boolean;
+  built?: BuiltContext | null;
+  ranked?: RankedSymbol[];
+  analogs?: HistoryAnalog[];
+  empty?: boolean;
+  reason?: "no_index" | "no_symbols";
+}): ContextPayload {
+  const built = input.built ?? null;
+  const payload: ContextPayload = {
+    task: input.task,
+    complexity: input.escalate ? "COMPLEX" : input.cls.complexity,
+    mode: input.mode,
+    knowledge: Boolean(input.knowledge),
+    empty: Boolean(input.empty),
+    reason: input.reason ?? null,
+    high: built?.high ?? [],
+    medium: built?.medium ?? [],
+    tests: built?.tests ?? [],
+    dependencies: built?.dependencies ?? [],
+    symbols: (input.ranked ?? []).slice(0, 20).map((r) => ({
+      name: r.name,
+      type: r.type,
+      file: r.file,
+      score: r.score,
+      reason: r.reason,
+    })),
+    hotspots: built?.hotspots ?? [],
+    analogs: (input.analogs ?? []).map((a) => ({
+      sha: a.sha,
+      shortSha: a.shortSha,
+      date: a.date,
+      subject: a.subject,
+      score: a.score,
+    })),
+  };
+  return payload;
 }

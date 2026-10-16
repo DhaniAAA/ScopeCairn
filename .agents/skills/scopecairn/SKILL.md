@@ -9,3 +9,4 @@ Langkah:
 2. Baca bagian Relevant Files dan Task Scope.
 3. Jika ada perubahan pada simbol bersama, jalankan `scopecairn impact <path>`.
 4. Kerjakan task sesuai scope, lalu berhenti saat selesai.
+5. Setelah mengedit, jalankan `scopecairn scan` agar indeks ScopeCairn mutakhir.

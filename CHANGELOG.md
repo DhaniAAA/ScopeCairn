@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.12.1 (2026-10-16)
+
+- docs: add project branding assets and update README and package configuration (671a813)
+- fix(integrate): workflow Antigravity pindah ke `.agents/workflows/scopecairn.md`, doctor/uninstall selaras + bersihkan legacy `workflows/`
+
 ## 0.12.0 (2026-10-15)
 
 - refactor(cli): konsolidasi 21 command jadi 8 visible - 11 alias + benchmark/update hidden, update deprecated ke npm, README diperbarui (720972f)

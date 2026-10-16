@@ -5,6 +5,11 @@ import { checkTreeSitter } from "../treesitter.js";
 import { detectAgentDir, detectPrefix, extractPrefixUsed } from "../integrate/detect.js";
 import { MARKER } from "../integrate/templates.js";
 import { AGENT_MATRIX } from "../integrate/matrix.js";
+import {
+  auditKnowledgeFiles,
+  antigravityKnowledgeSkillPath,
+  antigravityWorkflowPath,
+} from "../integrate/install.js";
 import { logError } from "../log.js";
 
 function tick(ok: boolean): string {
@@ -156,6 +161,14 @@ export async function cmdDoctor(repoRoot: string, opts?: { verbose?: boolean }):
   const agentDir = detectAgentDir(repoRoot);
   let prefixOk = true;
   let matrixOk = 0;
+  // Pesan sama untuk file utama dan file knowledge (extra).
+  const reportPrefixMismatch = (rel: string, used: string): void => {
+    prefixOk = false;
+    console.log(
+      `✗ Prefix tak konsisten di ${rel}: memakai \`${used}\`, ` +
+        `instalasi terdeteksi \`${expectedPrefix}\`. Jalankan ulang \`scopecairn init\`.`
+    );
+  };
   for (const t of AGENT_MATRIX) {
     const abs = path.join(repoRoot, t.rel);
     if (!fs.existsSync(abs)) continue;
@@ -170,18 +183,27 @@ export async function cmdDoctor(repoRoot: string, opts?: { verbose?: boolean }):
     matrixOk++;
     const used = extractPrefixUsed(text);
     if (used && used !== expectedPrefix) {
-      prefixOk = false;
-      console.log(
-        `✗ Prefix tak konsisten di ${t.rel}: memakai \`${used}\`, ` +
-          `instalasi terdeteksi \`${expectedPrefix}\`. Jalankan ulang \`scopecairn init\`.`
-      );
+      reportPrefixMismatch(t.rel, used);
     }
   }
   console.log(`${tick(matrixOk > 0)} Agent matrix (${matrixOk}/${AGENT_MATRIX.length} target terpasang)`);
+
+  // File knowledge (extra) tiap target terpasang — hilang = sisa upgrade lama.
+  // Dijalankan SEBELUM verdict prefix/knowledge dicetak agar tidak kontradiktif.
+  const audit = auditKnowledgeFiles(repoRoot, AGENT_MATRIX, expectedPrefix);
+  for (const m of audit.missing) {
+    console.log(`✗ Knowledge file hilang: ${m.rel} — jalankan \`scopecairn ${m.agent} install\`.`);
+  }
+  for (const p of audit.prefixIssues) {
+    reportPrefixMismatch(p.rel, p.used);
+  }
   if (matrixOk === 0) {
     console.log(`  Jalankan \`scopecairn init --agents all\` untuk memasang semua.`);
   } else if (prefixOk) {
     console.log(`✓ Prefix konsisten (\`${expectedPrefix} context\`)`);
+  }
+  if (audit.total > 0) {
+    console.log(`${tick(audit.ok === audit.total)} Knowledge files (${audit.ok}/${audit.total})`);
   }
 
   // Skill Antigravity (AI-2) tetap dicek terpisah dari matriks.
@@ -189,12 +211,21 @@ export async function cmdDoctor(repoRoot: string, opts?: { verbose?: boolean }):
   const skillOk = fs.existsSync(skillPath);
   console.log(`${tick(skillOk)} Skill (${agentDir}/skills/scopecairn/SKILL.md)`);
 
-  const wfPath = path.join(repoRoot, "workflows", "scopecairn.md");
-  console.log(`${tick(fs.existsSync(wfPath))} Workflow (workflows/scopecairn.md, opsional)`);
+  const kSkillPath = antigravityKnowledgeSkillPath(repoRoot);
+  const kSkillOk = fs.existsSync(kSkillPath);
+  console.log(`${tick(kSkillOk)} Knowledge skill (${path.relative(repoRoot, kSkillPath)})`);
+  if (skillOk && !kSkillOk) {
+    console.log(`  Jalankan \`scopecairn antigravity install\` untuk memasang knowledge skill.`);
+  }
+
+  const wfPath = antigravityWorkflowPath(repoRoot);
+  console.log(`${tick(fs.existsSync(wfPath))} Workflow (${path.relative(repoRoot, wfPath)}, opsional)`);
 
   // §8.6: pengingat yang tak bisa dicek otomatis.
   console.log(`i Strict Mode mengabaikan allowlist — semua perintah tetap perlu persetujuan.`);
 
-  const healthy = nodeOk && sqliteOk && ts.ok && dbOk && (matrixOk > 0 || skillOk) && prefixOk;
+  const knowledgeHealthy = audit.ok === audit.total && (!skillOk || kSkillOk);
+  const healthy =
+    nodeOk && sqliteOk && ts.ok && dbOk && (matrixOk > 0 || skillOk) && prefixOk && knowledgeHealthy;
   console.log(`Status: ${healthy ? "HEALTHY" : "DEGRADED (see ✗ above)"}`);
 }

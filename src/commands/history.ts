@@ -6,7 +6,36 @@ import { openDb } from "../db.js";
 import { logInvocation } from "../invocations.js";
 import { refreshIndex } from "../refresh.js";
 import { retrieve } from "../retrieval/retrieve.js";
-import { coChangeSet, groupHistoryFiles, historySearch } from "../retrieval/history/search.js";
+import {
+  coChangeSet,
+  groupHistoryFiles,
+  historySearch,
+  type HistoryAnalog,
+} from "../retrieval/history/search.js";
+
+export interface HistoryPayload {
+  task: string;
+  empty: boolean;
+  reason: "no_index" | "no_analogs" | null;
+  analogs: HistoryAnalog[];
+  coChange: { path: string; count: number }[];
+}
+
+/** Envelope --json dengan bentuk SELALU sama (termasuk saat kosong) agar
+ *  konsumen machine (knowledge agent) bisa parse tanpa cabang teks. */
+export function buildHistoryPayload(
+  task: string,
+  analogs: HistoryAnalog[] = [],
+  reason?: "no_index" | "no_analogs"
+): HistoryPayload {
+  return {
+    task,
+    empty: analogs.length === 0,
+    reason: reason ?? null,
+    analogs,
+    coChange: coChangeSet(analogs),
+  };
+}
 
 export interface HistoryOptions {
   limit?: number;
@@ -51,6 +80,10 @@ export async function cmdHistory(
       db.prepare(`SELECT COUNT(*) AS n FROM files`).get() as { n: number }
     ).n;
     if (fileCount === 0) {
+      if (opts.json) {
+        console.log(JSON.stringify(buildHistoryPayload(task, [], "no_index"), null, 2));
+        return;
+      }
       console.log("Index kosong. Jalankan `scopecairn scan` dulu.");
       return;
     }
@@ -65,11 +98,15 @@ export async function cmdHistory(
     const limit = Math.max(1, Math.min(10, opts.limit ?? 3));
     const analogs = historySearch(db, task, { seedFiles, limit });
     if (analogs.length === 0) {
+      if (opts.json) {
+        console.log(JSON.stringify(buildHistoryPayload(task, [], "no_analogs"), null, 2));
+        return;
+      }
       console.log("Tidak ada analog riwayat yang melewati ambang.");
       return;
     }
     if (opts.json) {
-      console.log(JSON.stringify({ task, analogs, coChange: coChangeSet(analogs) }, null, 2));
+      console.log(JSON.stringify(buildHistoryPayload(task, analogs), null, 2));
       return;
     }
     console.log(`# Analogi riwayat: ${task}\n`);

@@ -9,6 +9,12 @@ import {
 // Matriks agent: tiap agent dilayani lewat mekanisme native-nya sendiri
 // (skill, rules, command) — ScopeCairn TIDAK menulis AGENTS.md/CLAUDE.md,
 // karena file itu milik detail repo user, bukan instruksi tool.
+//
+// Skill knowledge (read-only: explain/summarize/audit) dipasang sebagai
+// `extra` di mekanisme "skill" native tiap agent: .claude/skills,
+// .cursor/skills (Cursor >= 2.4), .windsurf/skills, .github/skills
+// (Copilot/VS Code), .kiro/skills, .opencode/skills. Hanya salinan Claude
+// yang memuat `allowed-tools`.
 
 export interface AgentTarget {
   id: string;
@@ -32,6 +38,12 @@ export const AGENT_MATRIX: AgentTarget[] = [
     mode: "new",
     render: claudeSkillMd,
     presentMarker: ".claude",
+    extra: [
+      {
+        rel: ".claude/skills/scopecairn-knowledge/SKILL.md",
+        render: (p) => knowledgeSkillMd(p, "claude"),
+      },
+    ],
   },
   {
     id: "cursor",
@@ -40,6 +52,12 @@ export const AGENT_MATRIX: AgentTarget[] = [
     mode: "new",
     render: cursorRuleMdc,
     presentMarker: ".cursor",
+    extra: [
+      {
+        rel: ".cursor/skills/scopecairn-knowledge/SKILL.md",
+        render: knowledgeSkillMd,
+      },
+    ],
   },
   {
     id: "windsurf",
@@ -48,6 +66,12 @@ export const AGENT_MATRIX: AgentTarget[] = [
     mode: "new",
     render: genericRuleMd,
     presentMarker: ".windsurf",
+    extra: [
+      {
+        rel: ".windsurf/skills/scopecairn-knowledge/SKILL.md",
+        render: knowledgeSkillMd,
+      },
+    ],
   },
   {
     id: "copilot",
@@ -56,6 +80,12 @@ export const AGENT_MATRIX: AgentTarget[] = [
     mode: "merge",
     render: genericRuleMd,
     presentMarker: ".github",
+    extra: [
+      {
+        rel: ".github/skills/scopecairn-knowledge/SKILL.md",
+        render: knowledgeSkillMd,
+      },
+    ],
   },
   {
     id: "kiro",
@@ -78,6 +108,12 @@ export const AGENT_MATRIX: AgentTarget[] = [
     mode: "new",
     render: opencodeCommandMd,
     presentMarker: ".opencode",
+    extra: [
+      {
+        rel: ".opencode/skills/scopecairn-knowledge/SKILL.md",
+        render: knowledgeSkillMd,
+      },
+    ],
   },
 ];
 

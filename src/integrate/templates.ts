@@ -23,6 +23,8 @@ Gunakan hasilnya sebagai titik awal. Jangan menjelajah repository dari nol.
   \`${prefix} impact <path>\`
 - Butuh source sebuah fungsi? Gunakan \`${prefix} read symbol <nama>\`
   alih-alih membaca file penuh.
+- Keputusan arsitektur yang disepakati dicatat sekali agar tidak dibahas ulang:
+  \`${prefix} decide "pilihan X karena Y"\` (ikut terbaca di context berikutnya).
 
 ## Setelah selesai
 Jalankan \`${prefix} scan\` agar indeks ScopeCairn mencerminkan perubahanmu.
@@ -57,6 +59,8 @@ allowed-tools: Bash
    Butuh isi fungsi → \`${prefix} read symbol <nama>\`, bukan baca file penuh.
 4. Task membesar (>2 file)? Panggil ulang \`${prefix} context --escalate\`.
 5. Setelah mengedit: \`${prefix} scan\`. Berhenti saat acceptance criteria terpenuhi.
+6. Keputusan arsitektur disepakati? Catat sekali: \`${prefix} decide "<pilihan> karena <alasan>"\`
+   — ikut terbaca di setiap context berikutnya.
 `;
 }
 
@@ -89,6 +93,8 @@ Langkah:
 3. Jika ada perubahan pada simbol bersama, jalankan \`${prefix} impact <path>\`.
 4. Kerjakan task sesuai scope, lalu berhenti saat selesai.
 5. Setelah mengedit, jalankan \`${prefix} scan\` agar indeks ScopeCairn mutakhir.
+6. Ada keputusan arsitektur yang disepakati? Catat dengan
+   \`${prefix} decide "<pilihan> karena <alasan>"\` — terbaca di context berikutnya.
 `;
 }
 
@@ -101,6 +107,7 @@ Shortcut manual bila agent lupa memanggil ScopeCairn otomatis.
 2. Ikuti Relevant Files dan Task Scope dari output.
 3. Perlu dampak perubahan? \`${prefix} impact <path>\`.
 4. Perlu source simbol? \`${prefix} read symbol <nama>\`.
+5. Keputusan arsitektur disepakati? \`${prefix} decide "<pilihan> karena <alasan>"\`.
 `;
 }
 
@@ -118,6 +125,7 @@ Run \`${prefix} context "$ARGUMENTS"\` with the bash tool, then:
 3. If shared symbols change, run \`${prefix} impact <path>\`.
 4. Need a function body? Use \`${prefix} read symbol <nama>\`, not full reads.
 5. After editing, run \`${prefix} scan\` so the ScopeCairn index stays fresh.
+6. Settled an architectural decision? Record it once: \`${prefix} decide "<choice> because <why>"\`.
 <!-- scopecairn:managed -->
 `;
 }
@@ -165,7 +173,8 @@ Action: baca berurutan:
   hotspot PageRank, siklus, rute, model, protected.
 - \`.scopecairn/ARCHAEOLOGY.md\` — kepemilikan/bus factor/churn dari git log lokal
   (snapshot sekali tulis; hapus file untuk regenerasi).
-- \`.scopecairn/decisions.md\` — keputusan arsitektur yang tercatat, bila ada.
+- \`.scopecairn/decisions.md\` — keputusan arsitektur yang tercatat (dicatat
+  user/agent lewat \`${prefix} decide\`), bila ada.
 Observe freshness: GRAPH.md memuat baris
 \`> Freshness: scanned <ISO> · HEAD <sha>\` (bila tidak ada — mis. index lama —
 lewati cek ini). Bila ada, bandingkan <sha> dengan \`git rev-parse --short HEAD\`;
@@ -225,7 +234,10 @@ export const ALLOWLIST_COMMANDS = [
   "verify",
 ] as const;
 
-export const MANUAL_ONLY_COMMANDS = ["init", "scan"] as const;
+// `decide` sengaja TIDAK masuk allowlist: isinya prosa yang ikut disuntikkan
+// ke setiap prompt `context` berikutnya, jadi agent tidak boleh menulisnya
+// tanpa persetujuan user per panggilan.
+export const MANUAL_ONLY_COMMANDS = ["init", "scan", "decide"] as const;
 
 export function allowlistGuide(prefix: string): string {
   const lines = ALLOWLIST_COMMANDS.map((c) => `  ${prefix} ${c}`);
@@ -234,6 +246,8 @@ export function allowlistGuide(prefix: string): string {
     `tambahkan entri berikut ke Terminal Allow List Antigravity\n` +
     `(Settings → Advanced Settings → Terminal):\n\n` +
     lines.join("\n") +
-    `\n\nCatatan: ScopeCairn tidak mengubah pengaturan IDE Anda secara otomatis.`
+    `\n\nCatatan: ScopeCairn tidak mengubah pengaturan IDE Anda secara otomatis.\n` +
+    `\`decide\` sengaja tidak ada di daftar: isinya terbaca di setiap context\n` +
+    `berikutnya, jadi biarkan lewat persetujuan Anda per panggilan.`
   );
 }

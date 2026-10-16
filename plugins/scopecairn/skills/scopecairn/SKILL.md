@@ -18,3 +18,5 @@ allowed-tools: Bash
    Butuh isi fungsi → `scopecairn read symbol <nama>`, bukan baca file penuh.
 4. Task membesar (>2 file)? Panggil ulang `scopecairn context --escalate`.
 5. Setelah mengedit: `scopecairn scan`. Berhenti saat acceptance criteria terpenuhi.
+6. Keputusan arsitektur disepakati? Catat sekali: `scopecairn decide "<pilihan> karena <alasan>"`
+   — ikut terbaca di setiap context berikutnya.

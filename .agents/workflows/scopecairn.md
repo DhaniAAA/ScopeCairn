@@ -6,3 +6,4 @@ Shortcut manual bila agent lupa memanggil ScopeCairn otomatis.
 2. Ikuti Relevant Files dan Task Scope dari output.
 3. Perlu dampak perubahan? `scopecairn impact <path>`.
 4. Perlu source simbol? `scopecairn read symbol <nama>`.
+5. Keputusan arsitektur disepakati? `scopecairn decide "<pilihan> karena <alasan>"`.

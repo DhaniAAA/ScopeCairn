@@ -76,6 +76,16 @@ No MCP server, no embeddings, no network calls, no telemetry.
   click-for-details side panel (callers, callees, centrality scores).
   Nodes sized by symbols/PageRank, colored by Louvain community.
   Pan, zoom, hover inspect. Double-click to open, no server.
+- **Decision log** — `scopecairn decide "pakai X karena Y"` records an
+  architectural decision once; it is carried into every later
+  `context` call, so the agent stops re-litigating settled choices.
+- **Definition of Done check** — `verify --dod` rates each DoD item and
+  is honest about what it cannot know: `pass` only for what the machine
+  verified (scope, index freshness), `warn`/`fail` where it has evidence,
+  `manual` for judgement calls. Never a fabricated "done".
+- **Local usage report** — `status --usage` reads the local invocation
+  log: commands used, closed-loop rate (`scan` after a task), average
+  symbols per task. Local only, never leaves the machine.
 - **Graph export for external tools** — `scopecairn graph --export
   mermaid|graphml|dot|json` writes `.scopecairn/graph.<ext>` for PR
   diagrams (Mermaid), Gephi/Cytoscape (GraphML), Graphviz (DOT),
@@ -136,9 +146,10 @@ scopecairn scan                             # index repository (--rebuild, --cle
 scopecairn context "tambah fitur auth"      # AI agent task context + scope
 scopecairn impact src/indexer.ts            # blast radius & affected tests (--run-tests)
 scopecairn graph buildContext               # inspect relations, path (--to), export (--export)
-scopecairn verify                           # pre-commit safety guard (--diff, --arch)
-scopecairn status                           # index statistics & health checks (--doctor, --html)
+scopecairn verify --dod                     # pre-commit safety guard (--diff, --arch, --dod)
+scopecairn status --usage                   # index statistics & health checks (--doctor, --html)
 scopecairn read symbol indexFileSymbols     # symbol-level source excerpt
+scopecairn decide "graf di SQLite, tanpa embedding"   # catat keputusan arsitektur
 ```
 
 Per-agent installers (instead of `init --agents …`):
@@ -162,8 +173,8 @@ ScopeCairn organizes its capabilities into **6 core commands** aligned with code
 | `context "<task>"` | **AI Agent Context & Scope:** Main agent entry point with auto-refresh, task classification, relevant context, task scope, and Task Guard. Options: `--escalate`, `--mode NORMAL\|FAST\|SAFE\|AUDIT`, `--max-tokens N`, `--no-history`, `--with-diff`, `--json`. |
 | `impact <target>` | **Blast Radius & Test Selection:** Change impact analysis across direct, indirect, tests, UI components, and API clients. Options: `--run-tests` (run affected tests directly), `--tests` (list affected tests only), `--repos [list]` (cross-repo blast radius). |
 | `graph [symbol]` | **Knowledge Graph & Navigation:** Symbol relations, PageRank centrality, community clusters, and cycle status. Options: `--to <target>` (shortest multi-hop call path), `--export <fmt>` (`mermaid\|graphml\|dot\|json`). |
-| `verify` | **Pre-Commit Safety Guard:** Working tree check against protected files, task scope creep, and circular dependency regressions. Options: `--diff` (structural symbol-level diff vs HEAD), `--arch` (architectural layer rules), `--strict`, `--task <t>`. |
-| `status` | **Health & Diagnostics:** Index statistics and metadata. Options: `--doctor` (integration and adapter health check), `--verbose`, `--html` (generate local HTML dashboard). |
+| `verify` | **Pre-Commit Safety Guard:** Working tree check against protected files, task scope creep, and circular dependency regressions. Options: `--diff` (structural symbol-level diff vs HEAD), `--arch` (architectural layer rules), `--dod` (Definition of Done: verified / warned / manual, never a claimed pass), `--strict`, `--task <t>`. |
+| `status` | **Health & Diagnostics:** Index statistics and metadata. Options: `--doctor` (integration and adapter health check), `--usage` (local usage & compliance report), `--verbose`, `--html` (generate local HTML dashboard). |
 
 ### Helper & Setup Commands
 
@@ -171,6 +182,7 @@ ScopeCairn organizes its capabilities into **6 core commands** aligned with code
 | ------- | ----------- |
 | `init [path]` | Initial indexing + Skill, Workflow, detected agent skills (`--agents …\|all`). |
 | `read symbol <name>` | Symbol-level source excerpt (not whole files). |
+| `decide "…"` | Record an architectural decision into `.scopecairn/decisions.md` (no argument: list them). Read back by `context`. |
 | `benchmark [--tune]` | Retrieval recall, irrelevant ratio, context reduction + weight tuning (dev-only, hidden from `--help`). |
 | `<agent> install` | Agent installers: `antigravity`, `claude`, `cursor`, `windsurf`, `copilot`, `kiro`, `opencode`. |
 

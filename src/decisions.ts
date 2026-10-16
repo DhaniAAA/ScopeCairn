@@ -14,14 +14,28 @@ export function loadDecisions(repoRoot: string): string | null {
   }
 }
 
+/** Entri keputusan (baris daftar `- ...`) tanpa header, urut sebagaimana ditulis. */
+export function listDecisions(repoRoot: string): string[] {
+  const raw = loadDecisions(repoRoot);
+  if (!raw) return [];
+  return raw
+    .split("\n")
+    .filter((l) => l.startsWith("- "))
+    .map((l) => l.trimEnd());
+}
+
 export function appendDecision(repoRoot: string, text: string): void {
+  // Keputusan selalu satu baris: newline mentah akan memecah daftar markdown
+  // saat dibaca `context`, jadi rapikan dulu.
+  const line = text.replace(/\s+/g, " ").trim();
+  if (line.length === 0) throw new Error("teks keputusan kosong");
   const file = decisionsPath(repoRoot);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const date = new Date().toISOString().slice(0, 10);
-  const line = `- ${date}: ${text}\n`;
+  const entry = `- ${date}: ${line}\n`;
   if (!fs.existsSync(file)) {
-    fs.writeFileSync(file, `# Decisions\n\n${line}`, "utf8");
+    fs.writeFileSync(file, `# Decisions\n\n${entry}`, "utf8");
   } else {
-    fs.appendFileSync(file, line, "utf8");
+    fs.appendFileSync(file, entry, "utf8");
   }
 }

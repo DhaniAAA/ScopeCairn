@@ -6,6 +6,13 @@ import { retrieve } from "../retrieval/retrieve.js";
 import { classify } from "../retrieval/classify.js";
 import { refreshCycles, getCycles, describeCycle } from "../graph/cycles.js";
 import { logInvocation } from "../invocations.js";
+import {
+  collectAffectedTests,
+  dodFailed,
+  evaluateDod,
+  renderDod,
+  type DodCheck,
+} from "../scope/dod.js";
 import { cmdDiff } from "./diff.js";
 import { cmdArchCheck } from "./archcheck.js";
 
@@ -17,6 +24,7 @@ export interface VerifyOptions {
   diff?: boolean;
   arch?: boolean;
   init?: boolean;
+  dod?: boolean;
 }
 
 export interface VerifyResult {
@@ -30,15 +38,19 @@ export interface VerifyResult {
     involvesChangedFiles: boolean;
   }[];
   warnings: string[];
+  /** Hanya terisi bila `--dod` diberikan. */
+  dod?: DodCheck[];
 }
 
 export async function runVerify(
   repoRoot: string,
   opts: VerifyOptions = {}
 ): Promise<VerifyResult> {
+  let indexRefreshed = false;
   if (!opts.noRefresh) {
     try {
       await refreshIndex(repoRoot);
+      indexRefreshed = true;
     } catch {
       // index refresh best-effort
     }
@@ -58,12 +70,14 @@ export async function runVerify(
   const scopeViolations: string[] = [];
   const warnings: string[] = [];
   const detectedCycles: VerifyResult["cycles"] = [];
+  const scopeChecked = Boolean(opts.task && opts.task.trim().length > 0);
+  let dod: DodCheck[] | undefined;
 
   try {
     logInvocation(db, "verify");
 
     // 1. Task Scope check (if task description is supplied)
-    if (opts.task && opts.task.trim().length > 0) {
+    if (scopeChecked && opts.task) {
       const retrieval = retrieve(db, repoRoot, opts.task);
       const faninOf = (id: number): number => {
         const r = db
@@ -152,6 +166,18 @@ export async function runVerify(
     } catch {
       // skema lama — abaikan
     }
+
+    // 4. Definition of Done (--dod): nilai apa yang bisa dinilai mesin,
+    // sisanya ditandai `manual` — tidak pernah diklaim lulus.
+    if (opts.dod) {
+      dod = evaluateDod({
+        changedFiles: changed,
+        scopeChecked,
+        scopeViolations,
+        affectedTests: collectAffectedTests(db, changed),
+        indexRefreshed,
+      });
+    }
   } finally {
     db.close();
   }
@@ -162,6 +188,7 @@ export async function runVerify(
   if (protectedViolations.length > 0) ok = false;
   if (newCycleViolations.length > 0) ok = false;
   if (opts.strict && scopeViolations.length > 0) ok = false;
+  if (dod && dodFailed(dod)) ok = false;
 
   return {
     ok,
@@ -170,6 +197,7 @@ export async function runVerify(
     scopeViolations,
     cycles: detectedCycles,
     warnings,
+    dod,
   };
 }
 
@@ -250,6 +278,11 @@ export async function cmdVerify(
     for (const w of result.warnings.slice(0, 10)) {
       console.log(`      • ${w}`);
     }
+  }
+
+  if (result.dod) {
+    console.log("");
+    console.log(renderDod(result.dod));
   }
 
   console.log("");

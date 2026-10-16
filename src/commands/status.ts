@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { dataDir, dbPath, openDb } from "../db.js";
 import { detectAdapters } from "../adapters/index.js";
+import { collectUsage, renderUsage } from "../usage.js";
 import { cmdDoctor } from "./doctor.js";
 import { cmdDashboard } from "./dashboard.js";
 
@@ -10,6 +11,7 @@ export interface StatusOptions {
   verbose?: boolean;
   html?: boolean;
   dashboard?: boolean;
+  usage?: boolean;
   out?: string;
 }
 
@@ -31,6 +33,10 @@ export async function cmdStatus(repoRoot: string, opts: StatusOptions = {}): Pro
   }
   const db = openDb(repoRoot);
   try {
+    if (opts.usage) {
+      console.log(renderUsage(collectUsage(db)));
+      return;
+    }
     const files = (db.prepare(`SELECT COUNT(*) AS n FROM files`).get() as { n: number }).n;
     const byLang = db
       .prepare(`SELECT language, COUNT(*) AS n FROM files GROUP BY language ORDER BY n DESC`)

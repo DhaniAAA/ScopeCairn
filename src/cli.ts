@@ -21,6 +21,7 @@ import { cmdDiff } from "./commands/diff.js";
 import { cmdArchCheck } from "./commands/archcheck.js";
 import { cmdWatch } from "./commands/watch.js";
 import { cmdUpdate } from "./commands/update.js";
+import { cmdDecide } from "./commands/decide.js";
 import { registerAgentCommands } from "./commands/agents.js";
 import pkg from "../package.json" with { type: "json" };
 
@@ -37,12 +38,13 @@ program
   $ scopecairn context "add login"        AI agent context + scope for a task
   $ scopecairn impact src/indexer.ts      change blast radius & test selection (--run-tests)
   $ scopecairn graph buildContext         inspect graph relations, path (--to), export (--export)
-  $ scopecairn verify                     safety guard: protected, scope, cycles (--diff, --arch)
-  $ scopecairn status                     health & index status (--doctor, --html)
+  $ scopecairn verify                     safety guard: protected, scope, cycles (--diff, --arch, --dod)
+  $ scopecairn status                     health & index status (--doctor, --html, --usage)
 
 Helper & Setup Commands:
   $ scopecairn init                      index repo + setup agent integration
   $ scopecairn read symbol indexFileSymbols symbol-level source excerpt
+  $ scopecairn decide "pakai X karena Y"  catat keputusan arsitektur (tanpa argumen: daftar)
 
 Previous standalone commands (rebuild, clean, watch, doctor, dashboard,
 test-select, path, export, diff, arch-check, history) still work as hidden
@@ -134,12 +136,13 @@ program
   .description("Pre-commit guard: check protected files, task scope, cycles (--diff, --arch)")
   .option("--diff", "structural symbol-level diff of working tree vs HEAD")
   .option("--arch", "check architectural layer rules and import boundaries")
+  .option("--dod", "check Definition of Done items that can be verified mechanically")
   .option("--init", "generate initial .scopecairn/arch.json configuration template (with --arch)")
   .option("--task <task>", "task description to check scope creep against")
   .option("--strict", "fail if any changes fall outside task scope")
   .option("--json", "output results as JSON")
   .option("--no-refresh", "skip index auto-refresh")
-  .action((opts: { task?: string; strict?: boolean; json?: boolean; noRefresh?: boolean; diff?: boolean; arch?: boolean; init?: boolean }) =>
+  .action((opts: { task?: string; strict?: boolean; json?: boolean; noRefresh?: boolean; diff?: boolean; arch?: boolean; init?: boolean; dod?: boolean }) =>
     cmdVerify(repoRoot(), opts)
   );
 
@@ -152,8 +155,9 @@ program
   .option("--doctor", "check integration and adapter health")
   .option("--verbose", "print adapter/graph errors to stderr as well (with --doctor)")
   .option("--html", "generate a local HTML dashboard into .scopecairn/dashboard.html")
+  .option("--usage", "local usage & compliance report (invocations, closed loop)")
   .option("--out <path>", "output file for dashboard HTML")
-  .action((opts: { doctor?: boolean; verbose?: boolean; html?: boolean; out?: string }) =>
+  .action((opts: { doctor?: boolean; verbose?: boolean; html?: boolean; usage?: boolean; out?: string }) =>
     cmdStatus(repoRoot(), opts)
   );
 
@@ -175,6 +179,12 @@ program
   .description("Read a symbol's source excerpt (not the whole file)")
   .option("--json", "output results as JSON")
   .action((kind: string, name: string, opts: { json?: boolean }) => cmdRead(repoRoot(), kind, name, opts));
+
+program
+  .command("decide [text]")
+  .description("Catat keputusan arsitektur ke .scopecairn/decisions.md (tanpa argumen: tampilkan daftar)")
+  .option("--json", "output results as JSON")
+  .action((text: string | undefined, opts: { json?: boolean }) => cmdDecide(repoRoot(), text, opts));
 
 program
   .command("benchmark", { hidden: true })

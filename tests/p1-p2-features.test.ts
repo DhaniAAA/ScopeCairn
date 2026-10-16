@@ -6,6 +6,7 @@ import os from "node:os";
 import { detectTestRunner } from "../src/commands/testselect.js";
 import { checkArchitecture, initArchConfig } from "../src/commands/archcheck.js";
 import { runVerify } from "../src/commands/verify.js";
+import { DEFINITION_OF_DONE } from "../src/scope/guard.js";
 import { computeStructuralDiff } from "../src/commands/diff.js";
 import { openDb } from "../src/db.js";
 
@@ -97,4 +98,21 @@ test("runVerify passes on clean repo without protected file changes", async () =
   assert.ok(Array.isArray(res.changedFiles));
   assert.ok(Array.isArray(res.protectedViolations));
   assert.ok(Array.isArray(res.cycles));
+});
+
+test("runVerify --dod melaporkan semua item DoD dan tidak mengklaim verifikasi palsu", async () => {
+  const res = await runVerify(process.cwd(), { noRefresh: true, dod: true });
+  assert.ok(Array.isArray(res.dod), "dod harus terisi saat --dod diberikan");
+  assert.equal(res.dod.length, DEFINITION_OF_DONE.length);
+
+  // --no-refresh: index tidak dimutakhirkan pada invokasi ini → peringatan, bukan gagal.
+  const index = res.dod.find((c) => c.item.includes("Index dimutakhirkan"));
+  assert.equal(index?.status, "warn");
+
+  // Tanpa --task, scope tak bisa dinilai mesin → manual, bukan pass.
+  const scope = res.dod.find((c) => c.item === "Tidak ada file berubah tanpa alasan");
+  assert.equal(scope?.status, "manual");
+
+  // warn/manual tidak boleh menggagalkan verify.
+  assert.ok(res.dod.every((c) => c.status !== "fail"));
 });

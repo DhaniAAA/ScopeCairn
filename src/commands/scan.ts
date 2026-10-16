@@ -1,6 +1,7 @@
 import fs from "node:fs";
-import { dataDir } from "../db.js";
+import { dataDir, openDb } from "../db.js";
 import { scanRepository } from "../scanner.js";
+import { logInvocation } from "../invocations.js";
 import { cmdWatch } from "./watch.js";
 
 export interface ScanOptions {
@@ -32,6 +33,18 @@ export async function cmdScan(repoRoot: string, opts: ScanOptions = {}): Promise
   console.log("ScopeCairn");
   console.log("✓ Repository detected");
   const stats = await scanRepository(repoRoot);
+  // Compliance (AI-5): `scan` menutup loop prompt → context → kerja → refresh,
+  // jadi ikut dicatat. Mode watch tidak lewat sini agar log tidak banjir.
+  try {
+    const db = openDb(repoRoot);
+    try {
+      logInvocation(db, "scan");
+    } finally {
+      db.close();
+    }
+  } catch {
+    // pencatatan tak boleh menggagalkan scan
+  }
   console.log(`✓ ${stats.totalFilesSeen} files found (non-ignored)`);
   console.log(`✓ ${stats.sourceFiles} source files`);
   if (stats.metaFiles > 0) {

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.15.0 (2026-10-22)
+
+- feat: add 1-line transparent status cue to agent protocol templates (715d012)
+
 ## 0.14.1 (2026-10-22)
 
 - perf(scanner): prune ignored directories during walk and optimize SQLite pragmas (41fc795)

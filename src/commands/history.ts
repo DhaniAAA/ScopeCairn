@@ -5,6 +5,7 @@ import { execFileSync } from "node:child_process";
 import { openDb } from "../db.js";
 import { logInvocation } from "../invocations.js";
 import { refreshIndex } from "../refresh.js";
+import { skipRefresh } from "./opts.js";
 import { retrieve } from "../retrieval/retrieve.js";
 import {
   coChangeSet,
@@ -65,8 +66,7 @@ export async function cmdHistory(
   opts: HistoryOptions = {}
 ): Promise<void> {
   // Commander memetakan --no-refresh ke { refresh: false }; terima dua bentuk.
-  const skipRefresh = opts.noRefresh === true || (opts as { refresh?: boolean }).refresh === false;
-  if (!skipRefresh) {
+  if (!skipRefresh(opts)) {
     try {
       await refreshIndex(repoRoot);
     } catch {

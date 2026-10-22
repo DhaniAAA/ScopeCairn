@@ -228,4 +228,8 @@ export async function cmdDoctor(repoRoot: string, opts?: { verbose?: boolean }):
   const healthy =
     nodeOk && sqliteOk && ts.ok && dbOk && (matrixOk > 0 || skillOk) && prefixOk && knowledgeHealthy;
   console.log(`Status: ${healthy ? "HEALTHY" : "DEGRADED (see ✗ above)"}`);
+  // Tanpa ini, pre-commit hook yang memanggil `status --doctor` selalu lulus
+  // walau Status-nya DEGRADED. Set exit code, jangan memaksa process.exit
+  // supaya finally/closers tetap jalan.
+  if (!healthy) process.exitCode = 1;
 }

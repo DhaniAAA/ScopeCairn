@@ -107,7 +107,7 @@ export function removeManagedBlock(
     }
   }
   const anchored = new RegExp(
-    `\\n*${MARKER}\\n# ScopeCairn[\\s\\S]*?pertanyaan non-coding\\.[ \\t]*(\\n|$)`,
+    `\\n*${MARKER}\\n# ScopeCairn[\\s\\S]*?(?:pertanyaan non-coding|context berikutnya)\\.[ \\t]*(\\n|$)`,
     "",
   );
   if (anchored.test(content)) {
@@ -115,7 +115,7 @@ export function removeManagedBlock(
   }
   // Yatim versi lama (marker hilang, badan tersisa): jangkar pada judul +
   // baris terakhir template yang khas. Hapus SEMUA kemunculan.
-  const orphan = /# ScopeCairn[\s\S]*?pertanyaan non-coding\.[ \t]*(\n|$)/g;
+  const orphan = /# ScopeCairn[\s\S]*?(?:pertanyaan non-coding|context berikutnya)\.[ \t]*(\n|$)/g;
   if (orphan.test(content)) {
     return { next: foldBlank(content.replace(orphan, "")), changed: true };
   }

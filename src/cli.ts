@@ -1,9 +1,8 @@
-import { Command } from "commander";
+import { Command, InvalidOptionArgumentError } from "commander";
 import fs from "node:fs";
 import path from "node:path";
 import { cmdScan } from "./commands/scan.js";
 import { cmdStatus } from "./commands/status.js";
-import { cmdRebuild } from "./commands/rebuild.js";
 import { cmdDoctor } from "./commands/doctor.js";
 import { cmdGraph } from "./commands/graph.js";
 import { cmdPath } from "./commands/path.js";
@@ -24,6 +23,23 @@ import { cmdUpdate } from "./commands/update.js";
 import { cmdDecide } from "./commands/decide.js";
 import { registerAgentCommands } from "./commands/agents.js";
 import pkg from "../package.json" with { type: "json" };
+
+/**
+ * Coercion integer untuk opsi Commander.
+ *
+ * Jangan pernah memakai `parseInt` langsung: Commander memanggil
+ * `fn(value, previous)`, dan argumen kedua `parseInt` adalah RADIX.
+ * `--debounce 300 --debounce 700` jadi `parseInt("700", 300)` → `NaN`,
+ * yang lalu lolos ke `setTimeout(fn, NaN)` (0 ms → scan storm) dan
+ * `slice(0, NaN)` (hasil kosong). Input buruk ditolak di sini, bukan diam.
+ */
+function intArg(value: string, previous: number): number {
+  const n = Number.parseInt(value, 10);
+  if (!Number.isFinite(n)) {
+    throw new InvalidOptionArgumentError(`expected integer, got "${value}"`);
+  }
+  return n;
+}
 
 const program = new Command();
 program
@@ -75,7 +91,7 @@ program
   .option("--rebuild", "rebuild index from scratch (recover from corrupt index)")
   .option("--clean", "remove local index directory (.scopecairn)")
   .option("--watch", "watch repository files and auto-refresh index in background")
-  .option("--debounce <ms>", "debounce time in milliseconds for watch mode (default 300)", parseInt)
+  .option("--debounce <ms>", "debounce time in milliseconds for watch mode (default 300)", intArg)
   .action((opts: { rebuild?: boolean; clean?: boolean; watch?: boolean; debounce?: number }) =>
     cmdScan(repoRoot(), opts)
   );
@@ -89,7 +105,7 @@ program
   .option("--escalate", "force full COMPLEX context")
   .option("--no-refresh", "skip incremental refresh (debugging/benchmark)")
   .option("--mode <mode>", "agent mode: NORMAL|FAST|SAFE|AUDIT", "NORMAL")
-  .option("--max-tokens <n>", "potong konteks agar estimasi muat N token (≈ char/4)", parseInt)
+  .option("--max-tokens <n>", "potong konteks agar estimasi muat N token (≈ char/4)", intArg)
   .option("--no-history", "lewati bagian Analogi riwayat")
   .option("--with-diff", "tambahkan ringkasan diff pada Analogi riwayat")
   .option("--no-rules", "lewati bagian Project Rules (AGENTS.md)")
@@ -139,10 +155,11 @@ program
   .option("--dod", "check Definition of Done items that can be verified mechanically")
   .option("--init", "generate initial .scopecairn/arch.json configuration template (with --arch)")
   .option("--task <task>", "task description to check scope creep against")
+  .option("--base <ref>", "compare against a base ref (e.g. main, origin/main, HEAD~3) to include committed changes")
   .option("--strict", "fail if any changes fall outside task scope")
   .option("--json", "output results as JSON")
   .option("--no-refresh", "skip index auto-refresh")
-  .action((opts: { task?: string; strict?: boolean; json?: boolean; noRefresh?: boolean; diff?: boolean; arch?: boolean; init?: boolean; dod?: boolean }) =>
+  .action((opts: { task?: string; strict?: boolean; json?: boolean; noRefresh?: boolean; diff?: boolean; arch?: boolean; init?: boolean; dod?: boolean; base?: string }) =>
     cmdVerify(repoRoot(), opts)
   );
 
@@ -217,7 +234,7 @@ program
 program
   .command("watch", { hidden: true })
   .description("[Alias: `scopecairn scan --watch`] Watch files and refresh index automatically")
-  .option("--debounce <ms>", "debounce time in milliseconds (default 300)", parseInt)
+  .option("--debounce <ms>", "debounce time in milliseconds (default 300)", intArg)
   .action((opts: { debounce?: number }) => cmdScan(repoRoot(), { watch: true, debounce: opts.debounce }));
 
 program
@@ -268,7 +285,7 @@ program
 program
   .command("history <task>", { hidden: true })
   .description("[Alias: `scopecairn context \"<task>\"`] Find analog commits for task")
-  .option("--limit <n>", "jumlah analog (default 3, maks 10)", parseInt)
+  .option("--limit <n>", "jumlah analog (default 3, maks 10)", intArg)
   .option("--json", "output results as JSON")
   .option("--no-refresh", "skip incremental refresh (debugging/benchmark)")
   .option("--with-diff", "tambahkan ringkasan diff per analog")
@@ -278,4 +295,11 @@ program
 
 registerAgentCommands(program, repoRoot);
 
-program.parseAsync(process.argv);
+// Tanpa catch, penolakan dari async handler menjadi unhandled rejection:
+// Node 20+ mencetak stack mentah berisi path absolut. Tangani di sini agar
+// pesan ke pengguna tetap singkat dan exit code eksplisit.
+program.parseAsync(process.argv).catch((err: unknown) => {
+  const message = err instanceof Error ? err.message : String(err);
+  console.error(`scopecairn: ${message}`);
+  process.exitCode = 1;
+});

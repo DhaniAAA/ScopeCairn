@@ -1,17 +1,18 @@
 import { openDb } from "../db.js";
 import { refreshIndex } from "../refresh.js";
+import { skipRefresh } from "./opts.js";
 import { runBenchmark, tuneWeights } from "../benchmark/run.js";
 import { runHistoryBenchmark } from "../benchmark/history.js";
 import { benchmarkReport } from "../benchmark/report.js";
-import { gitSignals } from "../retrieval/git.js";
+import { gitSignalsFor } from "../retrieval/git.js";
 
 // Benchmark & kalibrasi (PRD §18). Tanpa LLM: recall, irrelevant ratio,
 // estimasi context reduction, dan grid search bobot FR-05.
 export async function cmdBenchmark(
   repoRoot: string,
-  opts: { tune?: boolean; noRefresh?: boolean } = {}
+  opts: { tune?: boolean; noRefresh?: boolean; refresh?: boolean } = {}
 ): Promise<void> {
-  if (!opts.noRefresh) await refreshIndex(repoRoot);
+  if (!skipRefresh(opts)) await refreshIndex(repoRoot);
   const db = openDb(repoRoot);
   try {
     const fileCount = (
@@ -21,7 +22,7 @@ export async function cmdBenchmark(
       console.log("Index kosong. Jalankan `scopecairn scan` dulu.");
       return;
     }
-    const git = gitSignals(repoRoot, []);
+    const git = gitSignalsFor(db, repoRoot, []);
     const summary = runBenchmark(db, repoRoot);
     const tune = opts.tune ? tuneWeights(db, repoRoot) : null;
     console.log(benchmarkReport(summary, tune, git.available));

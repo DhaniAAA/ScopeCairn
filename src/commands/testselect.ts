@@ -16,12 +16,53 @@ export interface TestSelectResult {
   target: string;
   tests: string[];
   runnerCommand?: string;
+  /**
+   * Bentuk aman untuk eksekusi: argv terpisah, tanpa shell.
+   * `runnerCommand` hanya untuk ditampilkan — jangan pernah di-`split` lalu
+   * dieksekusi, karena `files.path` bisa berisi metakarakter shell.
+   */
+  runnerArgv?: string[];
 }
 
-export function detectTestRunner(
+interface RunnerPlan {
+  /** String siap tampil, mis. `npx vitest run tests/a.test.ts`. */
+  command: string;
+  /** argv terpisah untuk `spawnSync(..., { shell: false })`. */
+  argv: string[];
+}
+
+// Di Windows `npx`/`npm` adalah shim `.cmd` yang tidak bisa di-exec tanpa
+// shell. Memakai nama `.cmd` secara eksplisit membuat `shell: false` aman,
+// sehingga tidak ada opportunity injeksi dari path file yang diindeks.
+function bin(name: "npx" | "npm"): string {
+  return process.platform === "win32" ? `${name}.cmd` : name;
+}
+
+/** Runner yang bisa dieksekusi langsung — nama bin sama untuk display & argv. */
+function plan(argv: string[]): RunnerPlan {
+  return { command: argv.join(" "), argv };
+}
+
+/**
+ * Runner berbasis npm/npx. String yang DITAMPILKAN tetap `npx`/`npm` supaya
+ * bisa di-copy-paste; hanya argv eksekusi yang memakai shim `.cmd` di Windows.
+ */
+function planNpm(binName: "npx" | "npm", args: string[]): RunnerPlan {
+  return {
+    command: [binName, ...args].join(" "),
+    argv: [bin(binName), ...args],
+  };
+}
+
+/**
+ * Susun perintah test runner. `testFiles` berasal dari kolom `files.path`
+ * (hasil scan repo), jadi HARUS tetap per-element — tidak boleh digabung
+ * menjadi string yang lalu di-`split`.
+ */
+export function detectTestRunnerPlan(
   repoRoot: string,
   testFiles: string[]
-): string | undefined {
+): RunnerPlan | undefined {
   if (testFiles.length === 0) return undefined;
   const pkgPath = path.join(repoRoot, "package.json");
   if (fs.existsSync(pkgPath)) {
@@ -29,16 +70,16 @@ export function detectTestRunner(
       const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
       const testScript = (pkg.scripts && pkg.scripts.test) || "";
       if (testScript.includes("vitest")) {
-        return `npx vitest run ${testFiles.join(" ")}`;
+        return planNpm("npx", ["vitest", "run", ...testFiles]);
       }
       if (testScript.includes("jest")) {
-        return `npx jest ${testFiles.join(" ")}`;
+        return planNpm("npx", ["jest", ...testFiles]);
       }
       if (testScript.includes("tsx --test") || testScript.includes("node --test")) {
-        return `npx tsx --test ${testFiles.join(" ")}`;
+        return planNpm("npx", ["tsx", "--test", ...testFiles]);
       }
       // General npm test with files passed
-      return `npm test -- ${testFiles.join(" ")}`;
+      return planNpm("npm", ["test", "--", ...testFiles]);
     } catch {
       // ignore
     }
@@ -46,21 +87,29 @@ export function detectTestRunner(
 
   // Check Python
   if (fs.existsSync(path.join(repoRoot, "pytest.ini")) || fs.existsSync(path.join(repoRoot, "pyproject.toml"))) {
-    return `pytest ${testFiles.join(" ")}`;
+    return plan(["pytest", ...testFiles]);
   }
 
   // Check Go
   if (fs.existsSync(path.join(repoRoot, "go.mod"))) {
     const dirs = Array.from(new Set(testFiles.map((f) => path.dirname(f))));
-    return `go test ${dirs.map((d) => `./${d}`).join(" ")}`;
+    return plan(["go", "test", ...dirs.map((d) => `./${d}`)]);
   }
 
   // Check Rust
   if (fs.existsSync(path.join(repoRoot, "Cargo.toml"))) {
-    return `cargo test`;
+    return plan(["cargo", "test"]);
   }
 
   return undefined;
+}
+
+/** Bentuk string siap tampil. Lihat `detectTestRunnerPlan` untuk eksekusi. */
+export function detectTestRunner(
+  repoRoot: string,
+  testFiles: string[]
+): string | undefined {
+  return detectTestRunnerPlan(repoRoot, testFiles)?.command;
 }
 
 export function findAffectedTests(
@@ -185,12 +234,13 @@ export function findAffectedTests(
     }
 
     const testList = Array.from(matchedTests).sort();
-    const runnerCmd = detectTestRunner(repoRoot, testList);
+    const runner = detectTestRunnerPlan(repoRoot, testList);
 
     return {
       target,
       tests: testList,
-      runnerCommand: runnerCmd,
+      runnerCommand: runner?.command,
+      runnerArgv: runner?.argv,
     };
   } finally {
     db.close();
@@ -204,8 +254,31 @@ export function cmdTestSelect(
 ): void {
   const result = findAffectedTests(repoRoot, target);
 
+  // Eksekusi harus mendahului emisi JSON. Sebelumnya `--run-tests --json`
+  // return lebih dulu sehingga test tidak pernah jalan, tapi exit 0 — CI
+  // mendapat JSON, nol eksekusi, dan dianggap lulus.
+  let exitStatus: number | undefined;
+  if (opts?.run && result.runnerArgv && result.runnerArgv.length > 0) {
+    const [cmd, ...args] = result.runnerArgv;
+    // `shell: false` — argv berasal dari `files.path` (input repo), bukan
+    // tepercaya. `shell: true` dulu memungkinkan injeksi lewat nama file.
+    if (!opts.json) console.log(`Executing: ${result.runnerCommand}`);
+    const res = spawnSync(cmd, args, { cwd: repoRoot, stdio: "inherit", shell: false });
+    if (res.error) {
+      const msg = `Gagal menjalankan test runner: ${res.error.message}`;
+      if (opts.json) console.error(msg);
+      else console.log(msg);
+      process.exitCode = 1;
+      exitStatus = 1;
+    } else {
+      // `status === null` berarti process dibunuh signal — perlakukan gagal.
+      exitStatus = res.status ?? 1;
+      process.exitCode = exitStatus;
+    }
+  }
+
   if (opts?.json) {
-    console.log(JSON.stringify(result, null, 2));
+    console.log(JSON.stringify({ ...result, exitStatus }, null, 2));
     return;
   }
 
@@ -222,18 +295,5 @@ export function cmdTestSelect(
   if (result.runnerCommand) {
     console.log(`\nRecommended runner command:`);
     console.log(`  $ ${result.runnerCommand}\n`);
-
-    if (opts?.run) {
-      console.log(`Executing tests...`);
-      const parts = result.runnerCommand.split(" ");
-      const cmd = parts[0];
-      const args = parts.slice(1);
-      const res = spawnSync(cmd, args, {
-        cwd: repoRoot,
-        stdio: "inherit",
-        shell: true,
-      });
-      process.exitCode = res.status ?? 0;
-    }
   }
 }

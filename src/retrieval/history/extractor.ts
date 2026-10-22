@@ -180,10 +180,9 @@ export function ensureHistoryIndex(
 ): HistorySyncResult {
   const maxCommits = Math.max(1, Math.min(5000, opts?.maxCommits ?? HISTORY_MAX_COMMITS));
   const fail = (shallow = false): HistorySyncResult => ({ available: false, indexed: 0, skipped: 0, shallow, shas: [] });
-  // Hitung baseline agar inkremental bisa diukur walau tanpa penanda.
-  let before = 0;
+  // Pastikan tabel riwayat ada (eksekusi pertama pada DB baru).
   try {
-    before = (db.prepare(`SELECT COUNT(*) AS n FROM commits`).get() as { n: number }).n;
+    db.prepare(`SELECT COUNT(*) AS n FROM commits`).get();
   } catch (err) {
     logError("history", err, repoRoot);
     return fail();
@@ -215,14 +214,29 @@ export function ensureHistoryIndex(
     return { available: true, indexed: 0, skipped: 0, shallow, shas: [] };
   }
   // Ambil detail hanya untuk rentang baru (atau 2000 teratas bila re-sync).
-  const oldest = range[range.length - 1];
-  const newest = range[0];
-  const detailRange = lastSha && headShas.includes(lastSha) ? `${oldest}..${newest}` : `--max-count=${Math.min(maxCommits, range.length)}`;
+  //
+  // PENTING: jangan pakai `oldest..newest`. `git log A..B` berarti
+  // reachable(B) dikurangi reachable(A) — jadi A sendiri TIDAK ikut, dan
+  // `oldest` justru commit yang paling tua dari `range` (yaitu yang paling
+  // perlu terindeks). Akibatnya tiap sync inkremental kehilangan tepat satu
+  // commit, dan `history_last_sha` sudah maju sehingga tidak akan dicoba lagi.
+  //
+  // `headShas` sendiri dihasilkan `git log --no-merges` dari HEAD, jadi
+  // `git log --no-merges --max-count=range.length` mengembalikan persis
+  // range[..] — tanpa off-by-one dan tanpa masalah root-commit `oldest^`.
+  const detailRange = `--max-count=${range.length}`;
   const format = `%H${FS}%ct${FS}%an${FS}%s${SB}%b${RS}`;
-  const detailArgs =
-    detailRange.startsWith("--max-count")
-      ? ["log", "--no-merges", detailRange, `--format=${format}`, "--name-status", "-M", "--numstat", "--", "."]
-      : ["log", "--no-merges", `--format=${format}`, "--name-status", "-M", "--numstat", detailRange, "--", "."];
+  const detailArgs = [
+    "log",
+    "--no-merges",
+    detailRange,
+    `--format=${format}`,
+    "--name-status",
+    "-M",
+    "--numstat",
+    "--",
+    "."
+  ];
   const detail = runGit(repoRoot, detailArgs);
   if (!detail) return fail(shallow);
   let parsed: RawCommit[];
@@ -272,6 +286,5 @@ export function ensureHistoryIndex(
   } catch (err) {
     logError("history", err, repoRoot);
   }
-  void before;
   return { available: true, indexed, skipped, shallow, shas };
 }

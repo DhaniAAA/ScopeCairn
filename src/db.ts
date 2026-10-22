@@ -14,7 +14,7 @@ function loadDatabaseSync(): typeof DatabaseSyncType {
 
 export const DATA_DIR_NAME = ".scopecairn";
 export const DB_FILE_NAME = "scopecairn.db";
-export const SCHEMA_VERSION = 7;
+export const SCHEMA_VERSION = 8;
 
 export function dataDir(repoRoot: string): string {
   return path.join(repoRoot, DATA_DIR_NAME);
@@ -85,6 +85,17 @@ export function openDb(repoRoot: string): DatabaseSyncType {
       reason TEXT NOT NULL DEFAULT ''
     );
     CREATE INDEX IF NOT EXISTS idx_task_context_task ON task_context(task_id);
+    -- Scope yang DIRENDER ke agent (Required/Optional/Protected), disimpan
+    -- per task. Tanpa ini verify --task harus menghitung ulang scope dari
+    -- task string, dan hasilnya bisa berbeda dari yang benar-benar dilihat
+    -- agent (co-change history, --escalate, task SIMPLE) → false positive.
+    CREATE TABLE IF NOT EXISTS task_scope (
+      task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      path TEXT NOT NULL,
+      tier TEXT NOT NULL,
+      PRIMARY KEY (task_id, path)
+    );
+    CREATE INDEX IF NOT EXISTS idx_task_scope_task ON task_scope(task_id);
     -- Fase 5: invocation log untuk compliance rate (AI-5, §18).
     CREATE TABLE IF NOT EXISTS invocations (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -138,6 +149,15 @@ export function openDb(repoRoot: string): DatabaseSyncType {
     );
     CREATE INDEX IF NOT EXISTS idx_commit_files_sha ON commit_files(sha);
     CREATE INDEX IF NOT EXISTS idx_commit_files_path ON commit_files(path);
+    -- Cache fan-in (jumlah relasi masuk per simbol). Dipakai ranking
+    -- retrieval: tanpa cache, retrieve() menghitung ulang
+    -- GROUP BY target_id di seluruh tabel relationships pada SETIAP
+    -- pemanggilan — O(E) penuh, dan itu bottleneck utama di repo besar.
+    -- Dipopulate ulang di akhir scanRepository (satu lintasan GROUP BY).
+    CREATE TABLE IF NOT EXISTS fanin (
+      node_id INTEGER PRIMARY KEY,
+      n INTEGER NOT NULL
+    );
     CREATE VIRTUAL TABLE IF NOT EXISTS commit_fts USING fts5(
       sha UNINDEXED, subject, body, paths
     );
@@ -158,10 +178,23 @@ export function openDb(repoRoot: string): DatabaseSyncType {
     `UPDATE relationships SET evidence = 'INFERRED'
      WHERE relationship_type IN ('QUERIES','ROUTES_TO','TESTS') AND evidence = 'EXTRACTED'`
   );
-  db.exec(
-    `UPDATE relationships SET evidence = 'AMBIGUOUS'
-     WHERE relationship_type = 'CALLS' AND confidence < 1.0 AND evidence = 'EXTRACTED'`
-  );
+  // Backfill SATU KALI saja. Pernah dijalankan tanpa penjaga di setiap openDb(),
+  // sehingga membalik evidence='EXTRACTED' yang sengaja ditulis indexer untuk
+  // CALLS receiver-typed / named-import (confidence 0.95) menjadi 'AMBIGUOUS'
+  // pada perintah berikutnya. Penanda meta mencegah ulangan.
+  const CALLS_BACKFILL_KEY = "migration_calls_evidence_v1";
+  const callsBackfilled = db
+    .prepare(`SELECT value FROM meta WHERE key = ?`)
+    .get(CALLS_BACKFILL_KEY) as { value: string } | undefined;
+  if (!callsBackfilled) {
+    db.exec(
+      `UPDATE relationships SET evidence = 'AMBIGUOUS'
+       WHERE relationship_type = 'CALLS' AND confidence < 1.0 AND evidence = 'EXTRACTED'`
+    );
+    db.prepare(`INSERT INTO meta(key, value) VALUES (?, '1') ON CONFLICT(key) DO NOTHING`).run(
+      CALLS_BACKFILL_KEY
+    );
+  }
   // Fase 2+3 tables are created via IF NOT EXISTS, so older DBs
   // migrate automatically on next open.
   return db;
@@ -178,3 +211,4 @@ export interface FileRow {
   hash: string;
   size: number;
 }
+

@@ -20,6 +20,12 @@ export interface DodInput {
   affectedTests: string[];
   /** true bila index sudah di-refresh pada invokasi ini. */
   indexRefreshed: boolean;
+  /**
+   * true bila cek scope TIDAK bisa dilakukan (scope tak bisa dihitung).
+   * Tanpa ini item "Tidak ada file berubah tanpa alasan" akan claims `pass`
+   * padahal tidak ada yang dicek — klaim palsu.
+   */
+  scopeUndetermined?: boolean;
 }
 
 const MANUAL = "penilaian agent/user — tidak dapat diverifikasi otomatis";
@@ -47,6 +53,12 @@ const RULES: Record<string, Rule> = {
   "Tidak ada file berubah tanpa alasan": (i) => {
     if (!i.scopeChecked) {
       return { status: "manual", detail: "jalankan dengan --task \"<task>\" untuk memeriksa scope" };
+    }
+    if (i.scopeUndetermined) {
+      return {
+        status: "manual",
+        detail: "scope tidak dapat dihitung — cek scope tidak dijalankan",
+      };
     }
     if (i.scopeViolations.length === 0) {
       return { status: "pass", detail: `semua ${i.changedFiles.length} file berubah ada di dalam scope` };

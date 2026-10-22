@@ -12,11 +12,15 @@ import {
 import { cmdOrientasi, looksLikeRepoPath } from "./orientasi.js";
 import { loadDecisions } from "../decisions.js";
 import { loadProtectedPatterns } from "../scope/protected.js";
+import { persistScope } from "../scope/taskScope.js";
 import { changedFilesVsHead } from "../retrieval/gitChanged.js";
+import { skipRefresh } from "./opts.js";
 
 export interface ContextOptions {
   escalate?: boolean;
   noRefresh?: boolean;
+  /** Commander mengisi `--no-refresh` → `refresh: false`. Lihat `skipRefresh`. */
+  refresh?: boolean;
   mode?: AgentMode;
   maxTokens?: number;
   noHistory?: boolean;
@@ -60,7 +64,7 @@ export async function cmdContext(
   task: string,
   opts: ContextOptions = {}
 ): Promise<void> {
-  if (!opts.noRefresh) {
+  if (!skipRefresh(opts)) {
     const { stats, bulk } = await refreshIndex(repoRoot);
     if (bulk) {
       const note =
@@ -231,6 +235,15 @@ export async function cmdContext(
       projectRules,
       knowledge: opts.knowledge,
     });
+
+    // Simpan scope yang dirender ke agent. `verify --task` lalu membandingkan
+    // perubahan terhadap scope YANG BENAR-BENAR terlihat agent — bukan hasil
+    // hitung ulang yang bisa berbeda (co-change riwayat, --escalate, SIMPLE).
+    try {
+      persistScope(db, taskId, built.scope);
+    } catch {
+      // persistensi scope bersifat opsional — jangan gagalkan context
+    }
     // F2 --json: envelope machine-readable untuk RAG/knowledge agent.
     // Default markdown tetap agar konsumen lama tidak pecah.
     if (opts.json) {

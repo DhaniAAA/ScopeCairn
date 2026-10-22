@@ -56,8 +56,13 @@ export async function scanRepository(repoRoot: string): Promise<ScanStats> {
   const started = Date.now();
   const rules = loadIgnoreRules(repoRoot);
   const db = openDb(repoRoot);
-  ensureDefaultFiles(repoRoot);
+  // Deklarasi di luar `try` supaya `finally` bisa ROLLBACK saat body gagal.
+  let inTx = false;
   try {
+    // DI DALAM try: kalau ensureDefaultFiles melempar, `finally` tetap jalan
+    // dan handle SQLite tidak bocor (di Windowshandle yang bocor menahan
+    // scopecairn.db-wal).
+    ensureDefaultFiles(repoRoot);
     const allAbs: string[] = [];
     walk(repoRoot, allAbs);
     await prepareTreeSitter(allAbs
@@ -82,6 +87,23 @@ export async function scanRepository(repoRoot: string): Promise<ScanStats> {
     let sourceFiles = 0;
     let metaFiles = 0;
     const protectedPatterns = loadProtectedPatterns(repoRoot);
+
+    // Semua mutasi DB berikut dibungkus SATU transaksi. Sebelumnya tiap
+    // INSERT/DELETE auto-commit, padahal `files.hash` ditulis lebih dulu
+    // (baris ~144) sebelum simbol & relasi diekstrak. Kalau proses mati di
+    // tengah, file sudah tercatat "sama hash"-nya sehingga scan berikutnya
+    // masuk cabang `unchanged` dan TIDAK PERNAH diekstrak ulang → file
+    // permanen terindeks dengan 0 simbol, 0 relasi, tanpa error.
+    //
+    // Side-effect berkas (GRAPH.md, GRAPH.html) sengaja DI LUAR transaksi:
+    // penulisan berkas tidak bisa di-rollback dan akan mendahului DB commit
+    // kalau ikut di dalam.
+    try {
+      db.exec("BEGIN");
+      inTx = true;
+    } catch {
+      inTx = false; // sudah dalam transaksi (nested) — biarkan
+    }
 
     // Backfill: DBs lama tanpa graph/FTS — re-extract semuanya sekali.
     // Hanya sekali per DB (ditandai meta.backfill_done) agar repo yang
@@ -201,6 +223,20 @@ export async function scanRepository(repoRoot: string): Promise<ScanStats> {
     linkTests(db);
     cleanupIndex(db);
 
+    // Cache fan-in untuk ranking retrieval. Satu lintasan GROUP BY di akhir
+    // scan (bukan di setiap retrieve()). Diletakkan SEBELUM COMMIT supaya
+    // cache dan tabel relationships selalu konsisten — kalau scan gagal di
+    // tengah, ROLLBACK mengembalikan keduanya.
+    try {
+      db.exec(`DELETE FROM fanin`);
+      db.exec(
+        `INSERT INTO fanin(node_id, n)
+         SELECT target_id, COUNT(*) FROM relationships GROUP BY target_id`
+      );
+    } catch (err) {
+      logError("fanin", err, repoRoot);
+    }
+
     // Analogi riwayat: indeks git inkremental (best-effort; repo tanpa git
     // atau clone dangkal tetap sukses, hanya dilaporkan di doctor).
     try {
@@ -214,6 +250,11 @@ export async function scanRepository(repoRoot: string): Promise<ScanStats> {
       }
     } catch (err) {
       logError("history", err, repoRoot);
+    }
+
+    if (inTx) {
+      db.exec("COMMIT");
+      inTx = false;
     }
 
     // GRAPH.md: tulis ulang hanya bila graph berubah (file berubah atau
@@ -265,6 +306,13 @@ export async function scanRepository(repoRoot: string): Promise<ScanStats> {
       durationMs: Date.now() - started,
     };
   } finally {
+    if (inTx) {
+      try {
+        db.exec("ROLLBACK");
+      } catch {
+        // koneksi sudah rusak / transaksi sudah selesai
+      }
+    }
     db.close();
   }
 }

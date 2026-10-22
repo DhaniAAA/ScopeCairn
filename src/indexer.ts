@@ -157,27 +157,76 @@ function resolveModuleToFile(
   return res ? res.fileSymId : null;
 }
 
-// Re-index one file: wipe its symbols (relations cascade), re-insert.
+// Re-index one file: re-insert its symbols, then relations (phase 2).
 // Two-phase: phase 1 inserts symbols for ALL changed files first, so that
 // phase 2 cross-file resolution (CALLS, IMPORTS) is order-independent.
+//
+// PENTING — ID simbol harus STABIL. Riwayat sebelumnya melakukan
+// `DELETE FROM symbols WHERE file_id = ?` lalu INSERT. Karena
+// relationships.source_id/target_id = ON DELETE CASCADE (db.ts) dan
+// foreign_keys = ON, cascade itu ikut menghapus edge yang SUMBERNYA di file
+// LAIN yang tidak berubah — mis. `IMPORTS` dari para pengimpor. File lain
+// tidak masuk daftar `pending`, jadi edge-nya tidak pernah dibangun ulang:
+// setiap edit satu file mellowsi fan-in secara permanen dan monoton.
+//
+// Di sini simbol yang masih ada di-update pada baris yang sama (ID bertahan),
+// dan hanya simbol yang benar-benar hilang yang di-DELETE — sehingga edge
+// inbound tetap utuh, dan edge ke simbol yang hilang hilang dengan tepat.
 export function indexFileSymbols(
   db: DatabaseSync,
   fileId: number,
   relPath: string,
   content: string
 ): { extraction: ReturnType<typeof extractFile>; fileSym: number } {
-  db.prepare(`DELETE FROM symbols WHERE file_id = ?`).run(fileId);
-  const fileSym = fileSymbolId(db, fileId, relPath);
   const ext = extractFile(relPath, content);
+  const fileSym = fileSymbolId(db, fileId, relPath);
+
+  // Kandidat reuse dikunci (type, name), dipisah \u0000 karena nama simbol
+  // tidak mungkin mengandung NUL — jadi key tidak pernah bertabrakan.
+  // Diurutkan id agar overload/nama kembar consumption-nya deterministik.
+  const existingRows = db
+    .prepare(
+      `SELECT id, name, type FROM symbols
+       WHERE file_id = ? AND type != 'file' ORDER BY id`
+    )
+    .all(fileId) as { id: number; name: string; type: string }[];
+  const byKey = new Map<string, number[]>();
+  for (const r of existingRows) {
+    const key = `${r.type}\u0000${r.name}`;
+    const bucket = byKey.get(key);
+    if (bucket) bucket.push(r.id);
+    else byKey.set(key, [r.id]);
+  }
 
   const insSym = db.prepare(
     `INSERT INTO symbols(file_id, name, type, signature, start_line, end_line, doc)
      VALUES (?, ?, ?, ?, ?, ?, ?)`
   );
+  const updSym = db.prepare(
+    `UPDATE symbols SET signature = ?, start_line = ?, end_line = ?, doc = ? WHERE id = ?`
+  );
+  const kept = new Set<number>();
   for (const s of ext.symbols) {
     if (s.type === "import" || s.type === "export") continue;
-    insSym.run(fileId, s.name, s.type, s.signature, s.startLine, s.endLine, s.doc ?? "");
+    const bucket = byKey.get(`${s.type}\u0000${s.name}`);
+    const reuseId = bucket && bucket.length > 0 ? bucket.shift() : undefined;
+    if (reuseId !== undefined) {
+      kept.add(reuseId);
+      updSym.run(s.signature, s.startLine, s.endLine, s.doc ?? "", reuseId);
+    } else {
+      const r = insSym.run(fileId, s.name, s.type, s.signature, s.startLine, s.endLine, s.doc ?? "");
+      kept.add(Number(r.lastInsertRowid));
+    }
   }
+
+  // Hanya simbol yang benar-benar tidak ada lagi. Cascade dari sini CORRECT:
+  // tidak ada lagi simbol yang jadi target edge tersebut.
+  const stale = existingRows.filter((r) => !kept.has(r.id)).map((r) => r.id);
+  if (stale.length > 0) {
+    const delSym = db.prepare(`DELETE FROM symbols WHERE id = ?`);
+    for (const id of stale) delSym.run(id);
+  }
+
   syncFileIndex(db, fileId, relPath);
   return { extraction: ext, fileSym };
 }
@@ -189,6 +238,21 @@ export function indexFileRelations(
   extraction: ReturnType<typeof extractFile>,
   fileSym: number
 ): IndexResult {
+  // Bersihkan edge OUTBOUND file ini dulu. Sebelumnya phase 1 melakukan
+  // `DELETE FROM symbols WHERE file_id = ?` dan cascade ikut menghapus edge
+  // ini — jadi penghapusan itu terjadi "dengan papan bawah" saat simbol
+  // ber-hapus. Sekarang simbol yang bertahan dipertahankan (ID stabil),
+  // cascade tidak lagi menyapu, sehingga tanpa penghapusan eksplisit tiap
+  // re-index akan menumpuk edge duplikat (CALLS yang sama hingga puluhan kali).
+  //
+  // PENTING: hanya source_id milik file ini. Edge yang MASUK ke file ini
+  // (source di file lain) tidak boleh disentuh — justru itu yang membuat
+  // fan-in hilang di bug lama.
+  db.prepare(
+    `DELETE FROM relationships
+      WHERE source_id IN (SELECT id FROM symbols WHERE file_id = ?)`
+  ).run(fileId);
+
   const ids = new Map<string, number>();
   const rows = db
     .prepare(`SELECT id, name FROM symbols WHERE file_id = ? AND type != 'file'`)

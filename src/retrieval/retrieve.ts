@@ -1,7 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { tokenizeTask } from "./tokenize.js";
 import { seedSearch } from "./symbolIndex.js";
-import { gitSignals } from "./git.js";
+import { gitSignalsFor } from "./git.js";
 import { loadConfig, loadGlossary, type RetrievalConfig } from "./config.js";
 
 export interface RankedSymbol {
@@ -33,6 +33,44 @@ function expandGlossary(tokens: string[], glossary: Map<string, string[]>): stri
     }
   }
   return [...out];
+}
+
+// Batas placeholder untuk query `IN (...)`. SQLite membatasi jumlah variabel
+// terikat per statement (999 di build lama, 32766 di build modern). Repo besar
+// bisa punya >30k simbol yang terjangkau dalam maxDepth hop, jadi query
+// dibelah. 900 aman di semua build.
+const SQL_VAR_CHUNK = 900;
+
+/**
+ * Fan-in per simbol (jumlah relasi masuk).
+ * Sumber utama: cache `fanin` — diisi scanRepository dalam satu lintasan
+ * GROUP BY. Fallback ke hitung langsung bila cache belum ada (DB lama yang
+ * belum di-scan ulang), lalu cache diisi agar panggilan berikutnya cepat.
+ */
+function loadFanin(db: DatabaseSync): Map<number, number> {
+  const fanin = new Map<number, number>();
+  let rows: { id: number; n: number }[] = [];
+  try {
+    rows = db.prepare(`SELECT node_id AS id, n FROM fanin`).all() as { id: number; n: number }[];
+  } catch {
+    rows = [];
+  }
+  if (rows.length === 0) {
+    rows = db
+      .prepare(`SELECT target_id AS id, COUNT(*) AS n FROM relationships GROUP BY target_id`)
+      .all() as { id: number; n: number }[];
+    try {
+      db.exec(`DELETE FROM fanin`);
+      const ins = db.prepare(`INSERT INTO fanin(node_id, n) VALUES (?, ?)`);
+      db.exec("BEGIN");
+      for (const r of rows) ins.run(r.id, r.n);
+      db.exec("COMMIT");
+    } catch {
+      // cache bersifat opsional — abaikan kegagalan
+    }
+  }
+  for (const r of rows) fanin.set(r.id, r.n);
+  return fanin;
 }
 
 // SEED → EXPAND → RANK (PRD FR-04 / FR-05).
@@ -111,13 +149,13 @@ export function retrieve(
   }
 
   // Centrality: fan-in (jumlah relasi masuk) ternormalisasi.
-  const fanin = new Map<number, number>();
+  // Sumber: cache tabel `fanin` (diisi scan). Tanpa cache ini, pemanggilan
+  // retrieve() memindai SELURUH tabel relationships (O(E)) hanya untuk
+  // menjumlahkan fan-in — di repo besar itu mendominasi waktu/context.
+  const fanin = loadFanin(db);
   let maxFan = 1;
-  for (const r of db
-    .prepare(`SELECT target_id AS id, COUNT(*) AS n FROM relationships GROUP BY target_id`)
-    .all() as { id: number; n: number }[]) {
-    fanin.set(r.id, r.n);
-    if (r.n > maxFan) maxFan = r.n;
+  for (const n of fanin.values()) {
+    if (n > maxFan) maxFan = n;
   }
 
   // Seed files untuk sinyal git.
@@ -130,19 +168,25 @@ export function retrieve(
       seedFiles.add(r.p);
     }
   }
-  const git = gitSignals(repoRoot, [...seedFiles]);
+  const git = gitSignalsFor(db, repoRoot, [...seedFiles]);
 
   // RANK: gabungkan 5 sinyal.
   const meta = new Map<number, { name: string; type: string; file: string; signature: string }>();
   if (visited.size > 0) {
-    const ph = [...visited].map(() => "?").join(",");
-    for (const r of db
-      .prepare(
-        `SELECT s.id, s.name, s.type, s.signature, f.path AS file FROM symbols s
-         JOIN files f ON f.id = s.file_id WHERE s.id IN (${ph})`
-      )
-      .all(...[...visited]) as { id: number; name: string; type: string; signature: string; file: string }[]) {
-      meta.set(r.id, r);
+    // Dibelah per 900 id: `visited` pada repo besar bisa melampaui batas
+    // variabel terikat SQLite → statement gagal total (bukan hasil kosong).
+    const visitedIds = [...visited];
+    for (let i = 0; i < visitedIds.length; i += SQL_VAR_CHUNK) {
+      const c = visitedIds.slice(i, i + SQL_VAR_CHUNK);
+      const ph = c.map(() => "?").join(",");
+      for (const r of db
+        .prepare(
+          `SELECT s.id, s.name, s.type, s.signature, f.path AS file FROM symbols s
+           JOIN files f ON f.id = s.file_id WHERE s.id IN (${ph})`
+        )
+        .all(...c) as { id: number; name: string; type: string; signature: string; file: string }[]) {
+        meta.set(r.id, r);
+      }
     }
   }
   const ranked: RankedSymbol[] = [];

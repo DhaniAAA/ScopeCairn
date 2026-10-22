@@ -2,7 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import type { RetrievalResult, RankedSymbol } from "./retrieve.js";
 import type { Classification } from "./classify.js";
 import { loadProtectedPatterns, isProtected } from "../scope/protected.js";
-import { computeScope, scopeBlock } from "../scope/scope.js";
+import { computeScope, scopeBlock, type TaskScope } from "../scope/scope.js";
 import { guardBlock } from "../scope/guard.js";
 import { coChangeSet, groupHistoryFiles, type HistoryAnalog } from "./history/search.js";
 import { demoteHeadings, type ProjectRules } from "../scope/agentsmd.js";
@@ -27,6 +27,13 @@ export interface BuiltContext {
   tests: string[];
   dependencies: string[];
   hotspots: ContextHotspot[];
+  /**
+   * Scope yang sama persis dengan yang dirender di markdown (Required /
+   * Optional / Protected). Dikembalikan supaya bisa DISIMPAN — tanpa ini,
+   * `verify` harus menghitung ulang scope dari task string, dan hasilnya bisa
+   * berbeda dari yang benar-benar dilihat agent (drift → false positive).
+   */
+  scope: TaskScope;
 }
 
 export interface HistoryBlock {
@@ -56,6 +63,15 @@ export function buildContext(
       files.length > 0
         ? files.map((f) => `\`${f}\``).join(", ")
         : "pencarian langsung (tidak ada simbol cocok di index)";
+    // Task SIMPLE tetap punya scope: file kandidat = Required. Tanpa ini
+    // scope kosong, dan `verify --task` akan menandai SETIAP file berubah
+    // sebagai pelanggaran scope (false positive total).
+    const simpleScope = computeScope(
+      files,
+      [],
+      [],
+      loadProtectedPatterns(opts?.repoRoot ?? ".")
+    );
     return {
       markdown:
         `# Task Context\n\n## Task\n${task}\n\n## Complexity\n` +
@@ -66,6 +82,7 @@ export function buildContext(
       tests: [],
       dependencies: [],
       hotspots: [],
+      scope: simpleScope,
     };
   }
 
@@ -328,6 +345,7 @@ export function buildContext(
       tests,
       dependencies: deps,
       hotspots,
+      scope,
     };
   }
 
@@ -349,7 +367,15 @@ export function buildContext(
     `\n` +
     guardBlock(extraDoD.length > 0 ? extraDoD : undefined);
 
-  return { markdown: md, high: highFiles, medium: medFiles, tests, dependencies: deps, hotspots };
+  return {
+    markdown: md,
+    high: highFiles,
+    medium: medFiles,
+    tests,
+    dependencies: deps,
+    hotspots,
+    scope,
+  };
 }
 
 /** Routing cost-aware (dipakai cmdContext): SIMPLE + ≤1 file → FAST implisit,

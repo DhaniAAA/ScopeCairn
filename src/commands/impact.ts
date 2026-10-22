@@ -4,6 +4,7 @@ import { createRequire } from "node:module";
 import { openDb, dbPath, dataDir } from "../db.js";
 import { logInvocation } from "../invocations.js";
 import { refreshIndex } from "../refresh.js";
+import { skipRefresh } from "./opts.js";
 import { findSymbols, neighbors } from "../graph.js";
 import { isProtected, loadProtectedPatterns } from "../scope/protected.js";
 import {
@@ -27,14 +28,14 @@ import { cmdTestSelect } from "./testselect.js";
 export async function cmdImpact(
   repoRoot: string,
   target: string,
-  opts: { noRefresh?: boolean; json?: boolean; repos?: string | boolean; runTests?: boolean; testsOnly?: boolean } = {}
+  opts: { noRefresh?: boolean; refresh?: boolean; json?: boolean; repos?: string | boolean; runTests?: boolean; testsOnly?: boolean } = {}
 ): Promise<void> {
   if (opts.runTests || opts.testsOnly) {
     cmdTestSelect(repoRoot, target, { run: opts.runTests, json: opts.json });
     return;
   }
 
-  if (!opts.noRefresh) await refreshIndex(repoRoot);
+  if (!skipRefresh(opts)) await refreshIndex(repoRoot);
 
   const db = openDb(repoRoot);
   try {
@@ -529,6 +530,10 @@ export async function cmdImpact(
         risk,
         reasons,
         evidence: withLine(center.file, center.id),
+        safetyGuidance: [
+          "Rumuskan 1 fakta penjamin keamanan (The single safety fact it is safe because of)",
+          "Buktikan fakta tersebut dengan menjalankan test terkait (--run-tests) sebelum merge",
+        ],
       }, null, 2));
       return;
     }
@@ -598,6 +603,10 @@ export async function cmdImpact(
       `## Risk: ${risk}`,
       ...reasons.map((r) => `- ${r}`),
       `- Bukti pusat: ${withLine(center.file, center.id)}`,
+      ``,
+      `## Safety Checklist (Blast Radius Protocol)`,
+      `- Rumuskan 1 fakta kunci penjamin keamanan (The single safety fact it is safe because of).`,
+      `- Buktikan fakta tersebut dengan menjalankan test terkait (\`--run-tests\`) atau skrip verifikasi sebelum merge.`,
     ];
     console.log(lines.join("\n"));
   } finally {

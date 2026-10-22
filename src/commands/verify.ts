@@ -1,9 +1,9 @@
 import { openDb } from "../db.js";
-import { changedFilesVsHead } from "../retrieval/gitChanged.js";
+import { changedFilesVsBase, changedFilesVsHead } from "../retrieval/gitChanged.js";
 import { loadProtectedPatterns, isProtected } from "../scope/protected.js";
+import { computeTaskScope, loadPersistedScope } from "../scope/taskScope.js";
 import { refreshIndex } from "../refresh.js";
-import { retrieve } from "../retrieval/retrieve.js";
-import { classify } from "../retrieval/classify.js";
+import { skipRefresh } from "./opts.js";
 import { refreshCycles, getCycles, describeCycle } from "../graph/cycles.js";
 import { logInvocation } from "../invocations.js";
 import {
@@ -25,6 +25,12 @@ export interface VerifyOptions {
   arch?: boolean;
   init?: boolean;
   dod?: boolean;
+  /**
+   * Base ref untuk deteksi perubahan (mis. `main`, `origin/main`, `HEAD~3`).
+   * Tanpa ini hanya working tree vs HEAD yang dicek — perubahan yang sudah
+   * di-commit tidak terlihat sama sekali.
+   */
+  base?: string;
 }
 
 export interface VerifyResult {
@@ -40,6 +46,16 @@ export interface VerifyResult {
   warnings: string[];
   /** Hanya terisi bila `--dod` diberikan. */
   dod?: DodCheck[];
+  /**
+   * Dari mana scope diambil: `persisted` = scope yang tersimpan dari
+   * `context` (kontak yang sama dengan agent), `computed` = dihitung ulang
+   * karena `context` belum pernah dijalankan untuk task ini.
+   */
+  scopeSource?: "persisted" | "computed";
+  /** True bila scope tak bisa ditentukan → cek scope dilewati, bukan "lolos". */
+  scopeUndetermined?: boolean;
+  /** True bila `--base` dipakai tapi ref-nya tidak valid. */
+  baseInvalid?: boolean;
 }
 
 export async function runVerify(
@@ -47,7 +63,7 @@ export async function runVerify(
   opts: VerifyOptions = {}
 ): Promise<VerifyResult> {
   let indexRefreshed = false;
-  if (!opts.noRefresh) {
+  if (!skipRefresh(opts)) {
     try {
       await refreshIndex(repoRoot);
       indexRefreshed = true;
@@ -56,7 +72,10 @@ export async function runVerify(
     }
   }
 
-  const changed = changedFilesVsHead(repoRoot).map((p) => p.replace(/\\/g, "/"));
+  const baseResult = opts.base ? changedFilesVsBase(repoRoot, opts.base) : null;
+  const changed = (
+    baseResult ? baseResult.files : changedFilesVsHead(repoRoot)
+  ).map((p) => p.replace(/\\/g, "/"));
   const patterns = loadProtectedPatterns(repoRoot);
   const protectedViolations: string[] = [];
 
@@ -71,35 +90,48 @@ export async function runVerify(
   const warnings: string[] = [];
   const detectedCycles: VerifyResult["cycles"] = [];
   const scopeChecked = Boolean(opts.task && opts.task.trim().length > 0);
+  let scopeSource: "persisted" | "computed" | undefined;
+  let scopeUndetermined = false;
   let dod: DodCheck[] | undefined;
+
+  // Base ref tak valid → hasil tak bisa dipercaya. GAGAL, jangan lolos
+  // diam-diam: "0 file berubah" karena ref salah sama dengan false pass.
+  if (baseResult?.baseInvalid) {
+    warnings.push(
+      `Base ref "${baseResult.base}" tidak valid — perubahan tidak bisa dibandingkan. Cek nama branch/ref.`
+    );
+  }
 
   try {
     logInvocation(db, "verify");
 
     // 1. Task Scope check (if task description is supplied)
     if (scopeChecked && opts.task) {
-      const retrieval = retrieve(db, repoRoot, opts.task);
-      const faninOf = (id: number): number => {
-        const r = db
-          .prepare(`SELECT COUNT(*) AS n FROM relationships WHERE target_id = ?`)
-          .get(id) as { n: number };
-        return r.n;
-      };
-      const cls = classify(retrieval.ranked, faninOf, 0.15, patterns);
-      const { buildContext } = await import("../retrieval/contextBuilder.js");
-      const { computeScope } = await import("../scope/scope.js");
-      const built = buildContext(db, opts.task, retrieval, cls, { repoRoot });
-      const scope = computeScope(built.high, built.medium, built.tests, patterns);
-      const allowed = new Set([
-        ...scope.required,
-        ...scope.optional,
-      ].map((p) => p.replace(/\\/g, "/")));
+      // Prioritas: scope yang PERSIS dirender ke agent (disimpan saat
+      // `context`). Kalau belum ada, hitung ulang lewat jalur yang sama
+      // dengan `context` — bukan jalur terpisah yang bisa menyimpang.
+      const persisted = loadPersistedScope(db, opts.task);
+      const scope = persisted
+        ? persisted.scope
+        : await computeTaskScope(db, repoRoot, opts.task);
+      scopeSource = persisted ? "persisted" : "computed";
 
-      for (const f of changed) {
-        // Files created as tests or documentation are tolerated as optional,
-        // but core code files outside scope are marked as scope violations.
-        if (!allowed.has(f)) {
-          scopeViolations.push(f);
+      const allowed = new Set(
+        [...scope.required, ...scope.optional].map((p) => p.replace(/\\/g, "/"))
+      );
+      if (allowed.size === 0) {
+        // Scope kosong tak bisa dipakai menilai apa pun. Menandainya sebagai
+        // "semua file di luar scope" menghasilkan false positive total —
+        // lebih jujur Says "tidak bisa ditentukan".
+        scopeUndetermined = true;
+        warnings.push(
+          "Scope task tidak dapat dihitung — jalankan `scopecairn context` untuk task ini lebih dulu, atau perjelas `--task`."
+        );
+      } else {
+        for (const f of changed) {
+          if (!allowed.has(f)) {
+            scopeViolations.push(f);
+          }
         }
       }
     }
@@ -174,6 +206,7 @@ export async function runVerify(
         changedFiles: changed,
         scopeChecked,
         scopeViolations,
+        scopeUndetermined,
         affectedTests: collectAffectedTests(db, changed),
         indexRefreshed,
       });
@@ -189,6 +222,7 @@ export async function runVerify(
   if (newCycleViolations.length > 0) ok = false;
   if (opts.strict && scopeViolations.length > 0) ok = false;
   if (dod && dodFailed(dod)) ok = false;
+  if (baseResult?.baseInvalid) ok = false;
 
   return {
     ok,
@@ -198,6 +232,9 @@ export async function runVerify(
     cycles: detectedCycles,
     warnings,
     dod,
+    scopeSource,
+    scopeUndetermined: scopeUndetermined || undefined,
+    baseInvalid: baseResult?.baseInvalid || undefined,
   };
 }
 
@@ -223,7 +260,14 @@ export async function cmdVerify(
   }
 
   console.log("# ScopeCairn Verification Report\n");
-  console.log(`Changed files in working tree: ${result.changedFiles.length}`);
+  console.log(
+    opts.base
+      ? `Changed files vs base "${opts.base}" (committed + working tree): ${result.changedFiles.length}`
+      : `Changed files in working tree: ${result.changedFiles.length}`
+  );
+  if (result.baseInvalid) {
+    console.log("[✗] Base ref invalid — hasil perbandingan tidak valid");
+  }
   if (result.changedFiles.length > 0) {
     for (const f of result.changedFiles) {
       console.log(`  - ${f}`);
@@ -244,12 +288,22 @@ export async function cmdVerify(
 
   // Scope check
   if (opts.task) {
-    if (result.scopeViolations.length === 0) {
-      console.log("[✓] Scope Boundary: PASSED (All modifications within task scope)");
+    if (result.scopeUndetermined) {
+      console.log("[?] Scope Boundary: SKIPPED (scope could not be determined)");
+      console.log("    Jalankan `scopecairn context \"<task>\"` lebih dulu agar scope tersimpan,");
+      console.log("    lalu ulangi `scopecairn verify --task \"<task>\"`.");
+    } else if (result.scopeViolations.length === 0) {
+      const src =
+        result.scopeSource === "persisted"
+          ? " (scope dari context)"
+          : result.scopeSource === "computed"
+            ? " (scope dihitung ulang — context belum dijalankan)"
+            : "";
+      console.log(`[✓] Scope Boundary: PASSED (All modifications within task scope)${src}`);
     } else {
       const mark = opts.strict ? "[✗]" : "[!]";
       console.log(`${mark} Scope Boundary: ${opts.strict ? "FAILED" : "WARNING"}`);
-      console.log("    Modifications outside predicted task scope (scope creep):");
+      console.log("    Modifications outside task scope (scope creep):");
       for (const f of result.scopeViolations) {
         console.log(`      • ${f}`);
       }

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.14.1 (2026-10-22)
+
+- perf(scanner): prune ignored directories during walk and optimize SQLite pragmas (41fc795)
+
 ## 0.14.0 (2026-10-22)
 
 - feat: adopt pstack automatic protocol, conditional context, and safety impact checklist (4819208)

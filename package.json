@@ -1,6 +1,6 @@
 {
   "name": "scopecairn",
-  "version": "0.14.0",
+  "version": "0.14.1",
   "description": "ScopeCairn — Codebase Intelligence & Agent Optimization Layer (local-first)",
   "license": "MIT",
   "type": "module",

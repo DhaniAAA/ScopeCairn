@@ -1,0 +1,73 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release (e.g. v0.14.0)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run Typecheck
+        run: npm run typecheck
+
+      - name: Run Tests
+        run: npm test
+
+      - name: Build Bundles
+        run: npm run build
+
+      - name: Extract Release Notes from CHANGELOG.md
+        id: extract_notes
+        run: |
+          node -e "
+            const fs = require('fs');
+            const rawTag = '${{ github.event.inputs.tag }}' || process.env.GITHUB_REF_NAME || '';
+            const version = rawTag.replace(/^v/, '');
+            let notes = '';
+            if (fs.existsSync('CHANGELOG.md')) {
+              const changelog = fs.readFileSync('CHANGELOG.md', 'utf8');
+              const pattern = new RegExp('## ' + version + '[^\\n]*\\n\\n([\\s\\S]*?)(?=\\n## |$)');
+              const match = changelog.match(pattern);
+              if (match) {
+                notes = match[1].trim();
+              }
+            }
+            fs.writeFileSync('RELEASE_NOTES.md', notes);
+            console.log('Extracted notes for version ' + version + ' (' + notes.length + ' chars)');
+          "
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          name: ${{ github.event.inputs.tag || github.ref_name }}
+          body_path: RELEASE_NOTES.md
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

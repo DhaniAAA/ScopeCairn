@@ -24,6 +24,11 @@ Patuhi prinsip ini di setiap baris kode secara otomatis tanpa perlu diminta user
   2. Pertanyaan berupa diskusi konseptual, code review, arsitektur, atau sekadar tanya jawab.
   3. Melanjutkan percakapan dalam sesi yang sama di mana scope file sudah diketahui.
 - **Ekstraksi Query**: Jika prompt user panjang atau berupa spesifikasi kompleks, jangan masukkan seluruh paragraf ke terminal. Ambil 2–4 kata kunci teknis utama (nama modul, entitas, aksi) sebagai argumen context untuk mencari file jangkar (anchor), sementara detail spesifikasi lengkap tetap diikuti langsung dari prompt user.
+- **Transparansi Status (Status Cue 1-Baris)**: Awali baris pertama setiap respon task coding dengan penanda ringkas status ScopeCairn agar user mengetahui status scope secara transparan:
+  - Jika context dipanggil: \`> 🧭 [ScopeCairn: context "<query>" → N files in scope]\`
+  - Jika context dilewati: \`> 🧭 [ScopeCairn: scope known (<alasan singkat, misal: target file sudah spesifik>), context skipped]\`
+  - Jika impact dijalankan: \`> 🧭 [ScopeCairn: impact <path> checked]\`
+  - Jika verify dijalankan: \`> 🧭 [ScopeCairn: verify passed within scope]\`
 
 Gunakan hasilnya sebagai titik awal. Jangan menjelajah repository dari nol.
 
@@ -107,6 +112,7 @@ Prinsip Otomatis:
 - Blast Radius: Simbol bersama wajib impact + safety fact + buktikan dengan tes.
 - Anti-Looping: 2x gagal perbaiki bug pada tes yang sama → dilarang coba cara ke-3 dengan asumsi serupa; serang premis dasar secara independen.
 - Prove It Works: Selalu buktikan perbaikan/fitur dengan tes nyata sebelum menyatakan selesai.
+- Transparansi Status: Awali respon dengan 1 baris penanda scope, misal: \`> 🧭 [ScopeCairn: ...]\`.
 
 Langkah Alur Kerja:
 1. Jika prompt user panjang/kompleks, ambil 2–4 kata kunci teknis utama sebagai argumen context.
@@ -132,13 +138,14 @@ description: ScopeCairn codebase context + scope + engineering rigor for a task
 
 Run \`${prefix} context "$ARGUMENTS"\` with the bash tool (extract 2-4 technical keywords if query is complex), then:
 
-1. Use Relevant Files as the starting point — do not explore from zero.
-2. Change only Required and Optional files; Protected needs user approval.
-3. If shared symbols change, run \`${prefix} impact <path>\`, formulate one safety fact, and verify with tests.
-4. If bug fix fails 2x on the same test, stop and attack the premise independently before attempting a 3rd time.
-5. Need a function body? Use \`${prefix} read symbol <nama>\`, not full reads.
-6. Before finishing: perform adversarial self-review, ensure real tests pass, run \`${prefix} scan\`, then run \`${prefix} verify --task "$ARGUMENTS" --strict\` to catch out-of-scope files.
-7. Settled an architectural decision? Record it once: \`${prefix} decide "<choice> because <why>"\`.
+1. Always show a 1-line status cue at the start of your response, e.g. \`> 🧭 [ScopeCairn: context "$ARGUMENTS" → N files]\` (or explain if skipped).
+2. Use Relevant Files as the starting point — do not explore from zero.
+3. Change only Required and Optional files; Protected needs user approval.
+4. If shared symbols change, run \`${prefix} impact <path>\`, formulate one safety fact, and verify with tests.
+5. If bug fix fails 2x on the same test, stop and attack the premise independently before attempting a 3rd time.
+6. Need a function body? Use \`${prefix} read symbol <nama>\`, not full reads.
+7. Before finishing: perform adversarial self-review, ensure real tests pass, run \`${prefix} scan\`, then run \`${prefix} verify --task "$ARGUMENTS" --strict\` to catch out-of-scope files.
+8. Settled an architectural decision? Record it once: \`${prefix} decide "<choice> because <why>"\`.
 <!-- scopecairn:managed -->
 `;
 }

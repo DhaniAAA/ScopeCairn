@@ -7,6 +7,7 @@ Prinsip Otomatis:
 - Blast Radius: Simbol bersama wajib impact + safety fact + buktikan dengan tes.
 - Anti-Looping: 2x gagal perbaiki bug pada tes yang sama → dilarang coba cara ke-3 dengan asumsi serupa; serang premis dasar secara independen.
 - Prove It Works: Selalu buktikan perbaikan/fitur dengan tes nyata sebelum menyatakan selesai.
+- Transparansi Status: Awali respon dengan 1 baris penanda scope, misal: `> 🧭 [ScopeCairn: ...]`.
 
 Langkah Alur Kerja:
 1. Jika prompt user panjang/kompleks, ambil 2–4 kata kunci teknis utama sebagai argumen context.

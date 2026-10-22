@@ -26,6 +26,11 @@ Patuhi prinsip ini di setiap baris kode secara otomatis tanpa perlu diminta user
   2. Pertanyaan berupa diskusi konseptual, code review, arsitektur, atau sekadar tanya jawab.
   3. Melanjutkan percakapan dalam sesi yang sama di mana scope file sudah diketahui.
 - **Ekstraksi Query**: Jika prompt user panjang atau berupa spesifikasi kompleks, jangan masukkan seluruh paragraf ke terminal. Ambil 2–4 kata kunci teknis utama (nama modul, entitas, aksi) sebagai argumen context untuk mencari file jangkar (anchor), sementara detail spesifikasi lengkap tetap diikuti langsung dari prompt user.
+- **Transparansi Status (Status Cue 1-Baris)**: Awali baris pertama setiap respon task coding dengan penanda ringkas status ScopeCairn agar user mengetahui status scope secara transparan:
+  - Jika context dipanggil: `> 🧭 [ScopeCairn: context "<query>" → N files in scope]`
+  - Jika context dilewati: `> 🧭 [ScopeCairn: scope known (<alasan singkat, misal: target file sudah spesifik>), context skipped]`
+  - Jika impact dijalankan: `> 🧭 [ScopeCairn: impact <path> checked]`
+  - Jika verify dijalankan: `> 🧭 [ScopeCairn: verify passed within scope]`
 
 Gunakan hasilnya sebagai titik awal. Jangan menjelajah repository dari nol.
 

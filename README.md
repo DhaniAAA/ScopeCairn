@@ -58,10 +58,10 @@ No MCP server, no embeddings, no network calls, no telemetry.
 - **Multi-language** — TypeScript, JavaScript, Python, Java, Go, Rust,
   PHP, C#, C/C++, Ruby, HTML, Vue SFC (plus config/schema files as
   graph nodes).
-- **Multi-agent setup** — skills for Claude Code (project skill),
-  Antigravity, Cursor, Windsurf, Copilot, Kiro, and an OpenCode
-  slash command. ScopeCairn never touches your `AGENTS.md`/`CLAUDE.md` —
-  those hold your repo's details, not tool instructions.
+- **Multi-agent setup** — native rules & skills for Antigravity, Cursor,
+  Claude Code, Windsurf, GitHub Copilot, Kiro, and OpenCode. ScopeCairn
+  never touches your `AGENTS.md`/`CLAUDE.md` — those hold your repo's
+  details, not tool instructions.
 - **`GRAPH.md` knowledge file** — `.scopecairn/GRAPH.md` is a budgeted
   (±150 lines) frozen summary of the graph (modules, most-used symbols,
   PageRank hotspots, circular dependencies, routes, models, protected).
@@ -129,14 +129,52 @@ it runs project setup itself.
 
 ```bash
 cd your-repo
-scopecairn init      # index + Antigravity Skill + Workflow
+scopecairn init      # index + Antigravity Rule + Skill + Workflow
 ```
 
-Claude Code (project skill, committed with the repo):
+Per-agent installers (instead of `init --agents …`):
+
+You can list supported agents anytime with `scopecairn agents list`. Install or remove integrations individually using native paths:
 
 ```bash
+# Antigravity IDE (.agents/rules/ + skills/ + workflows/)
+scopecairn antigravity install
+
+# Claude Code (.claude/skills/ + rule mirroring in .claude/rules/)
 scopecairn claude install
+
+# Cursor (.cursor/rules/scopecairn.mdc with alwaysApply + knowledge skill)
+scopecairn cursor install
+
+# Windsurf (.windsurf/rules/scopecairn.md + knowledge skill)
+scopecairn windsurf install
+
+# GitHub Copilot (.github/copilot-instructions.md + knowledge skill)
+scopecairn copilot install
+
+# Kiro (.kiro/steering/scopecairn.md + knowledge skill)
+scopecairn kiro install
+
+# OpenCode (.opencode/commands/scopecairn.md + knowledge skill + permission snippet)
+scopecairn opencode install
+
+# Batch installation during init
+scopecairn init --agents all              # install for all supported agents
+scopecairn init --agents cursor,copilot   # install for specific agents only
+
+# Clean removal (preserves existing configs & custom instructions)
+scopecairn <agent> uninstall
 ```
+
+| Agent | Native Files Written / Merged | Execution Behavior |
+| :--- | :--- | :--- |
+| **Antigravity** | `.agents/rules/scopecairn.md`<br>`.agents/skills/scopecairn/SKILL.md`<br>`.agents/skills/scopecairn-knowledge/SKILL.md`<br>`.agents/workflows/scopecairn.md` | Auto-loaded into `<user_rules>` on every turn; skills available on demand. |
+| **Cursor** | `.cursor/rules/scopecairn.mdc`<br>`.cursor/skills/scopecairn-knowledge/SKILL.md` | `alwaysApply: true` auto-injects protocol into every chat & agent session. |
+| **Claude Code** | `.claude/skills/scopecairn/SKILL.md`<br>`.claude/rules/scopecairn.md`<br>`.claude/skills/scopecairn-knowledge/SKILL.md` | Standing rules loaded automatically; `allowed-tools: Bash` provides pre-approved terminal execution. |
+| **Windsurf** | `.windsurf/rules/scopecairn.md`<br>`.windsurf/skills/scopecairn-knowledge/SKILL.md` | Cascade loads modern `.windsurf/rules/` automatically. |
+| **GitHub Copilot** | `.github/copilot-instructions.md`<br>`.github/skills/scopecairn-knowledge/SKILL.md` | Safely merges managed block into repository custom instructions. |
+| **Kiro** | `.kiro/steering/scopecairn.md`<br>`.kiro/skills/scopecairn-knowledge/SKILL.md` | Default `always` steering inclusion injects context into all prompts. |
+| **OpenCode** | `.opencode/commands/scopecairn.md`<br>`.opencode/skills/scopecairn-knowledge/SKILL.md` | Registers `/scopecairn` slash command with `$ARGUMENTS` and prints permission guide. |
 
 After setup, your agent calls ScopeCairn automatically on every coding task.
 To query manually (replace `src/indexer.ts` or `buildContext` with files/symbols from your codebase):
@@ -150,17 +188,6 @@ scopecairn verify --dod                     # pre-commit safety guard (--diff, -
 scopecairn status --usage                   # index statistics & health checks (--doctor, --html)
 scopecairn read symbol indexFileSymbols     # symbol-level source excerpt
 scopecairn decide "graf di SQLite, tanpa embedding"   # catat keputusan arsitektur
-```
-
-Per-agent installers (instead of `init --agents …`):
-
-```bash
-scopecairn antigravity install   # Skill + Workflow + allowlist guide
-scopecairn claude install        # project skill .claude/skills (also: cursor, windsurf, copilot)
-scopecairn kiro install          # steering .kiro/steering + knowledge skill .kiro/skills/scopecairn-knowledge
-scopecairn opencode install      # /scopecairn slash command + permission snippet
-scopecairn claude uninstall      # clean removal, user content preserved
-scopecairn agents list
 ```
 
 ## 6 Core Commands

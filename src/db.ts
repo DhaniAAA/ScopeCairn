@@ -30,6 +30,9 @@ export function openDb(repoRoot: string): DatabaseSyncType {
   const db = new DatabaseSync(dbPath(repoRoot));
   db.exec(`
     PRAGMA journal_mode = WAL;
+    PRAGMA synchronous = NORMAL;
+    PRAGMA temp_store = MEMORY;
+    PRAGMA cache_size = -64000;
     PRAGMA foreign_keys = ON;
     CREATE TABLE IF NOT EXISTS files (
       id INTEGER PRIMARY KEY AUTOINCREMENT,

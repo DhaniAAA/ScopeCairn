@@ -38,16 +38,31 @@ function toPosixRel(repoRoot: string, abs: string): string {
   return path.relative(repoRoot, abs).split(path.sep).join("/");
 }
 
-function walk(absDir: string, out: string[]): void {
-  const entries = fs.readdirSync(absDir, { withFileTypes: true });
+function walk(
+  repoRoot: string,
+  absDir: string,
+  rules: ReturnType<typeof loadIgnoreRules>,
+  out: string[]
+): void {
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(absDir, { withFileTypes: true });
+  } catch {
+    return;
+  }
   for (const e of entries) {
     const abs = path.join(absDir, e.name);
+    const rel = toPosixRel(repoRoot, abs);
     if (e.isDirectory()) {
-      // Skip symlinked dirs to avoid loops.
+      // Skip symlinked dirs to avoid loops and skip ignored directories
+      // (node_modules, .git, target, bin, obj, dist, build, .next, etc.)
       if (e.isSymbolicLink()) continue;
-      walk(abs, out);
+      if (isIgnored(rel + "/", rules) || isIgnored(rel, rules)) continue;
+      walk(repoRoot, abs, rules, out);
     } else if (e.isFile()) {
-      out.push(abs);
+      if (!isIgnored(rel, rules)) {
+        out.push(abs);
+      }
     }
   }
 }
@@ -64,9 +79,9 @@ export async function scanRepository(repoRoot: string): Promise<ScanStats> {
     // scopecairn.db-wal).
     ensureDefaultFiles(repoRoot);
     const allAbs: string[] = [];
-    walk(repoRoot, allAbs);
+    walk(repoRoot, repoRoot, rules, allAbs);
     await prepareTreeSitter(allAbs
-      .filter((abs) => isSourceFile(abs) && !isIgnored(toPosixRel(repoRoot, abs), rules))
+      .filter((abs) => isSourceFile(abs))
       .map((abs) => grammarForPath(abs))
       .filter((name): name is string => name !== null));
 

@@ -11,6 +11,7 @@ import {
   uninstallTarget,
   installAntigravity,
   uninstallAntigravity,
+  antigravityRulePath,
   antigravityKnowledgeSkillPath,
   auditKnowledgeFiles,
 } from "../src/integrate/install.js";
@@ -203,17 +204,40 @@ test("auditKnowledgeFiles mendeteksi file hilang dan prefix tak konsisten", () =
   }
 });
 
-test("antigravity: knowledge skill ditulis saat install dan dihapus saat uninstall", () => {
+test("antigravity: rule dan knowledge skill ditulis saat install dan dihapus saat uninstall", () => {
   const dir = tmpRepo();
   try {
     const lines = installAntigravity(dir, "scopecairn");
+    assert.ok(lines.some((l) => l.includes("Rule installed")));
     assert.ok(lines.some((l) => l.includes("Knowledge skill installed")));
+    const rPath = antigravityRulePath(dir);
     const kPath = antigravityKnowledgeSkillPath(dir);
+    assert.ok(fs.existsSync(rPath));
+    assert.ok(fs.readFileSync(rPath, "utf8").includes("ScopeCairn"));
     assert.ok(fs.existsSync(kPath));
     assert.ok(fs.readFileSync(kPath, "utf8").includes("name: scopecairn-knowledge"));
     uninstallAntigravity(dir);
+    assert.ok(!fs.existsSync(rPath));
     assert.ok(!fs.existsSync(kPath));
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("claude: rule mirroring .claude/rules/scopecairn.md ditulis saat install dan dihapus saat uninstall", () => {
+  const dir = tmpRepo();
+  try {
+    const claude = findTarget("claude")!;
+    assert.ok(claude.companionRule);
+    assert.equal(claude.companionRule.rel, ".claude/rules/scopecairn.md");
+    installTarget(dir, claude, "scopecairn");
+    const rulePath = path.join(dir, claude.companionRule.rel);
+    assert.ok(fs.existsSync(rulePath));
+    assert.ok(fs.readFileSync(rulePath, "utf8").includes("ScopeCairn"));
+    uninstallTarget(dir, claude);
+    assert.ok(!fs.existsSync(rulePath));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+

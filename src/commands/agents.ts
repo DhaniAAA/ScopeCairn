@@ -51,6 +51,9 @@ export function registerAgentCommands(program: Command, repoRoot: () => string):
         const prefix = detectPrefix(root);
         const r = installTarget(root, t, prefix);
         console.log(`✓ ${t.label}: ${r.rel} (${r.how})`);
+        if (t.companionRule) {
+          console.log(`✓ ${t.label} (Rule mirroring): ${t.companionRule.rel}`);
+        }
         if (t.id === "opencode") {
           console.log("");
           console.log(opencodePermissionGuide(prefix));
@@ -62,6 +65,9 @@ export function registerAgentCommands(program: Command, repoRoot: () => string):
       .action(() => {
         const r = uninstallTarget(repoRoot(), t);
         console.log(`✓ ${t.label}: ${r.rel} (${r.how})`);
+        if (t.companionRule) {
+          console.log(`✓ ${t.label} (Rule mirroring): ${t.companionRule.rel} (removed)`);
+        }
       });
   }
 }

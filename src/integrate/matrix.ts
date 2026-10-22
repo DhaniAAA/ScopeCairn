@@ -26,6 +26,8 @@ export interface AgentTarget {
   render: (prefix: string) => string;
   /** Petanda setup agent sudah ada (direktori/file) untuk deteksi otomatis. */
   presentMarker: string;
+  /** Rule pendamping (mis. .claude/rules/scopecairn.md untuk Claude Code). */
+  companionRule?: { rel: string; render: (prefix: string) => string };
   /** File tambahan yang ditulis sekaligus saat install (opsional). */
   extra?: Array<{ rel: string; render: (prefix: string) => string }>;
 }
@@ -38,6 +40,10 @@ export const AGENT_MATRIX: AgentTarget[] = [
     mode: "new",
     render: claudeSkillMd,
     presentMarker: ".claude",
+    companionRule: {
+      rel: ".claude/rules/scopecairn.md",
+      render: genericRuleMd,
+    },
     extra: [
       {
         rel: ".claude/skills/scopecairn-knowledge/SKILL.md",

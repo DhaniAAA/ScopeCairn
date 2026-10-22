@@ -35,6 +35,9 @@ export async function cmdInit(repoRoot: string, opts: InitOptions = {}): Promise
   for (const t of targets) {
     const r = installTarget(repoRoot, t, prefix);
     console.log(`✓ ${t.label}: ${r.rel} (${r.how})`);
+    if (t.companionRule) {
+      console.log(`✓ ${t.label} (Rule mirroring): ${t.companionRule.rel}`);
+    }
   }
 
   for (const line of installAntigravity(repoRoot, prefix)) console.log(`✓ ${line}`);

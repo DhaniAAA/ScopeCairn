@@ -7,6 +7,7 @@ import { MARKER } from "../integrate/templates.js";
 import { AGENT_MATRIX } from "../integrate/matrix.js";
 import {
   auditKnowledgeFiles,
+  antigravityRulePath,
   antigravityKnowledgeSkillPath,
   antigravityWorkflowPath,
 } from "../integrate/install.js";
@@ -185,6 +186,12 @@ export async function cmdDoctor(repoRoot: string, opts?: { verbose?: boolean }):
     if (used && used !== expectedPrefix) {
       reportPrefixMismatch(t.rel, used);
     }
+    if (t.companionRule) {
+      const cAbs = path.join(repoRoot, t.companionRule.rel);
+      if (!fs.existsSync(cAbs)) {
+        console.log(`✗ Rule mirroring hilang: ${t.companionRule.rel} — jalankan \`scopecairn ${t.id} install\`.`);
+      }
+    }
   }
   console.log(`${tick(matrixOk > 0)} Agent matrix (${matrixOk}/${AGENT_MATRIX.length} target terpasang)`);
 
@@ -206,7 +213,14 @@ export async function cmdDoctor(repoRoot: string, opts?: { verbose?: boolean }):
     console.log(`${tick(audit.ok === audit.total)} Knowledge files (${audit.ok}/${audit.total})`);
   }
 
-  // Skill Antigravity (AI-2) tetap dicek terpisah dari matriks.
+  // Antigravity IDE integration: Rule (auto-loaded via <user_rules>) + Skills + Workflow
+  const rulePath = antigravityRulePath(repoRoot);
+  const ruleOk = fs.existsSync(rulePath);
+  console.log(`${tick(ruleOk)} Rule (${path.relative(repoRoot, rulePath)})`);
+  if (!ruleOk) {
+    console.log(`  Jalankan \`scopecairn antigravity install\` untuk memasang rule otomatis Antigravity.`);
+  }
+
   const skillPath = path.join(repoRoot, agentDir, "skills", "scopecairn", "SKILL.md");
   const skillOk = fs.existsSync(skillPath);
   console.log(`${tick(skillOk)} Skill (${agentDir}/skills/scopecairn/SKILL.md)`);
@@ -226,7 +240,7 @@ export async function cmdDoctor(repoRoot: string, opts?: { verbose?: boolean }):
 
   const knowledgeHealthy = audit.ok === audit.total && (!skillOk || kSkillOk);
   const healthy =
-    nodeOk && sqliteOk && ts.ok && dbOk && (matrixOk > 0 || skillOk) && prefixOk && knowledgeHealthy;
+    nodeOk && sqliteOk && ts.ok && dbOk && (matrixOk > 0 || skillOk || ruleOk) && prefixOk && knowledgeHealthy;
   console.log(`Status: ${healthy ? "HEALTHY" : "DEGRADED (see ✗ above)"}`);
   // Tanpa ini, pre-commit hook yang memanggil `status --doctor` selalu lulus
   // walau Status-nya DEGRADED. Set exit code, jangan memaksa process.exit

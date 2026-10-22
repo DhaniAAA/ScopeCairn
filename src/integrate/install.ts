@@ -6,6 +6,7 @@ import {
   workflowMd,
   allowlistGuide,
   knowledgeSkillMd,
+  genericRuleMd,
 } from "./templates.js";
 import { AGENT_MATRIX, findTarget, type AgentTarget } from "./matrix.js";
 import { detectAgentDir, detectPrefix, extractPrefixUsed } from "./detect.js";
@@ -55,6 +56,13 @@ export function installTarget(
     fs.mkdirSync(path.dirname(abs), { recursive: true });
     fs.writeFileSync(abs, block.endsWith("\n") ? block : block + "\n");
     how = "generated";
+  }
+  // Tulis companion rule jika ada (mis. .claude/rules/scopecairn.md untuk Claude Code)
+  if (target.companionRule) {
+    const cAbs = path.join(repoRoot, target.companionRule.rel);
+    fs.mkdirSync(path.dirname(cAbs), { recursive: true });
+    const cBlock = target.companionRule.render(prefix);
+    fs.writeFileSync(cAbs, cBlock.endsWith("\n") ? cBlock : cBlock + "\n");
   }
   // File extra (knowledge skill) milik penuh ScopeCairn — ditulis untuk mode
   // "new" maupun "merge" (pada merge, hanya blok utama yang menumpang file user).
@@ -142,6 +150,14 @@ export function uninstallTarget(
   // `how` hanya melaporkan status file UTAMA; extra yang ikut dihapus tidak
   // boleh membuat klaim "removed" untuk file yang tidak disentuh.
   removeExtras(repoRoot, target);
+  // Hapus companion rule jika ada
+  if (target.companionRule) {
+    const cAbs = path.join(repoRoot, target.companionRule.rel);
+    if (fs.existsSync(cAbs)) {
+      fs.rmSync(cAbs, { force: true });
+      pruneEmptyDirs(path.dirname(cAbs), repoRoot);
+    }
+  }
   if (!fs.existsSync(abs)) return finish("absent");
   if (target.mode === "new") {
     fs.rmSync(abs, { force: true });
@@ -176,13 +192,23 @@ function pruneEmptyDirs(dir: string, stop: string): void {
   }
 }
 
-// Antigravity = Skill + Workflow + panduan allowlist (AI-7, §8.6).
+// Antigravity = Rule (.agents/rules/) + Skill + Knowledge Skill + Workflow.
+// Catatan: Antigravity IDE memuat otomatis file di `.agents/rules/*.md` ke dalam <user_rules>,
+// sedangkan skills/ bersifat on-demand dan workflows/ tidak dikenal secara native.
 export function installAntigravity(
   repoRoot: string,
   prefix = detectPrefix(repoRoot),
 ): string[] {
   const agentDir = detectAgentDir(repoRoot);
   const out: string[] = [];
+
+  // 1. Rule (.agents/rules/scopecairn.md) — dimuat otomatis oleh Antigravity pada setiap session & prompt
+  const rPath = antigravityRulePath(repoRoot);
+  fs.mkdirSync(path.dirname(rPath), { recursive: true });
+  fs.writeFileSync(rPath, genericRuleMd(prefix));
+  out.push(`Rule installed (${path.relative(repoRoot, rPath)})`);
+
+  // 2. Skill on-demand (.agents/skills/scopecairn/SKILL.md)
   const skillPath = path.join(
     repoRoot,
     agentDir,
@@ -193,15 +219,29 @@ export function installAntigravity(
   fs.mkdirSync(path.dirname(skillPath), { recursive: true });
   fs.writeFileSync(skillPath, skillMd(prefix));
   out.push(`Skill installed (${path.relative(repoRoot, skillPath)})`);
+
+  // 3. Knowledge skill on-demand (.agents/skills/scopecairn-knowledge/SKILL.md)
   const kPath = antigravityKnowledgeSkillPath(repoRoot);
   fs.mkdirSync(path.dirname(kPath), { recursive: true });
   fs.writeFileSync(kPath, knowledgeSkillMd(prefix));
   out.push(`Knowledge skill installed (${path.relative(repoRoot, kPath)})`);
+
+  // 4. Workflow (.agents/workflows/scopecairn.md)
   const wfPath = antigravityWorkflowPath(repoRoot);
   fs.mkdirSync(path.dirname(wfPath), { recursive: true });
   fs.writeFileSync(wfPath, workflowMd(prefix));
   out.push(`Workflow installed (${path.relative(repoRoot, wfPath)})`);
   return out;
+}
+
+/** Path rule Antigravity (.agents/rules/scopecairn.md) — dimuat otomatis via <user_rules>. */
+export function antigravityRulePath(repoRoot: string): string {
+  return path.join(
+    repoRoot,
+    detectAgentDir(repoRoot),
+    "rules",
+    "scopecairn.md",
+  );
 }
 
 /** Path skill knowledge Antigravity (installer + doctor dari sumber yang sama). */
@@ -228,6 +268,15 @@ export function antigravityWorkflowPath(repoRoot: string): string {
 export function uninstallAntigravity(repoRoot: string): string[] {
   const out: string[] = [];
   for (const dir of [".agents", ".agent"]) {
+    // Hapus Rule
+    const ruleP = path.join(repoRoot, dir, "rules", "scopecairn.md");
+    if (fs.existsSync(ruleP)) {
+      fs.rmSync(ruleP, { force: true });
+      pruneEmptyDirs(path.dirname(ruleP), repoRoot);
+      out.push(`Rule removed (${path.relative(repoRoot, ruleP)})`);
+    }
+
+    // Hapus Skills
     for (const [name, label] of [
       ["scopecairn", "Skill"],
       ["scopecairn-knowledge", "Knowledge skill"],

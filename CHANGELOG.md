@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.14.0 (2026-10-22)
+
+- feat: adopt pstack automatic protocol, conditional context, and safety impact checklist (4819208)
+- docs: replace AGENTS.md with OpenCode working notes and add knowledge skill documentation (401a8ce)
+- chore: release 0.13.0 (acab013)
+- chore(integrate): template sebut decide + regenerasi file dogfood (112b1ee)
+- fix(retrieval): arah edge TESTS di related tests contextBuilder (882941d)
+- feat: command decide, status --usage, verify --dod (073ec67)
+- fix(integrate): workflow Antigravity ke .agents/workflows (hapus legacy root workflows/) (1e5db5c)
+
 ## 0.13.0 (2026-10-16)
 
 - chore(integrate): template sebut decide + regenerasi file dogfood (112b1ee)

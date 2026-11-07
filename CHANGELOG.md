@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.16.0 (2026-11-07)
+
+- feat: phased optimizations and new features (0-6) + template revision (c4bf7d7)
+- docs: update README with detailed per-agent installation instructions and integration reference table (0170518)
+- feat(integrate): add rule mirroring for Antigravity and Claude Code (2558d1a)
+
 ## 0.15.0 (2026-10-22)
 
 - feat: add 1-line transparent status cue to agent protocol templates (715d012)

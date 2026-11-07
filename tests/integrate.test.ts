@@ -17,6 +17,9 @@ import {
 } from "../src/integrate/install.js";
 import {
   ALLOWLIST_COMMANDS,
+  genericRuleMd,
+  workflowMd,
+  opencodeCommandMd,
   knowledgeSkillMd,
   allowlistGuide,
   opencodePermissionGuide,
@@ -39,6 +42,7 @@ test("setiap target matrix punya knowledge skill di mekanisme native-nya", () =>
     copilot: ".github/skills/scopecairn-knowledge/SKILL.md",
     kiro: ".kiro/skills/scopecairn-knowledge/SKILL.md",
     opencode: ".opencode/skills/scopecairn-knowledge/SKILL.md",
+    qoder: ".qoder/skills/scopecairn-knowledge/SKILL.md",
   };
   for (const t of AGENT_MATRIX) {
     const files = t.extra ?? [];
@@ -146,12 +150,37 @@ test("uninstall merge tanpa marker: how jujur 'skipped', extra tetap dibersihkan
   }
 });
 
-test("allowlist memuat history — guide Antigravity dan opencode ikut sinkron", () => {
+test("allowlist memuat history, reuse, dead, dan session — rule agen mewajibkan reuse, dead, dan session", () => {
   assert.ok((ALLOWLIST_COMMANDS as readonly string[]).includes("history"));
+  assert.ok((ALLOWLIST_COMMANDS as readonly string[]).includes("reuse"));
+  assert.ok((ALLOWLIST_COMMANDS as readonly string[]).includes("dead"));
+  assert.ok((ALLOWLIST_COMMANDS as readonly string[]).includes("session"));
   assert.ok(allowlistGuide("scopecairn").includes("scopecairn history"));
+  assert.ok(allowlistGuide("scopecairn").includes("scopecairn reuse"));
+  assert.ok(allowlistGuide("scopecairn").includes("scopecairn dead"));
+  assert.ok(allowlistGuide("scopecairn").includes("scopecairn session"));
   assert.ok(
     opencodePermissionGuide("scopecairn").includes(`"scopecairn history *": "allow"`)
   );
+  assert.ok(
+    opencodePermissionGuide("scopecairn").includes(`"scopecairn reuse *": "allow"`)
+  );
+  assert.ok(
+    opencodePermissionGuide("scopecairn").includes(`"scopecairn dead *": "allow"`)
+  );
+  assert.ok(
+    opencodePermissionGuide("scopecairn").includes(`"scopecairn session *": "allow"`)
+  );
+  for (const doc of [
+    genericRuleMd("scopecairn"),
+    workflowMd("scopecairn"),
+    opencodeCommandMd("scopecairn"),
+  ]) {
+    assert.ok(doc.includes("scopecairn reuse"), "rule agen harus mewajibkan scopecairn reuse");
+    assert.ok(doc.includes("scopecairn dead"), "rule agen harus mewajibkan scopecairn dead");
+    assert.ok(doc.includes("scopecairn session load"), "rule agen harus mewajibkan scopecairn session load di awal sesi");
+    assert.ok(doc.includes("scopecairn session save"), "rule agen harus mewajibkan scopecairn session save sebelum selesai");
+  }
 });
 
 test("auditKnowledgeFiles mendeteksi file hilang dan prefix tak konsisten", () => {
@@ -204,21 +233,52 @@ test("auditKnowledgeFiles mendeteksi file hilang dan prefix tak konsisten", () =
   }
 });
 
-test("antigravity: rule dan knowledge skill ditulis saat install dan dihapus saat uninstall", () => {
+test("antigravity: rule, knowledge skill, dan AGENTS.md ditulis saat install dan dihapus saat uninstall", () => {
   const dir = tmpRepo();
   try {
     const lines = installAntigravity(dir, "scopecairn");
     assert.ok(lines.some((l) => l.includes("Rule installed")));
     assert.ok(lines.some((l) => l.includes("Knowledge skill installed")));
+    assert.ok(lines.some((l) => l.includes("AGENTS.md created")));
     const rPath = antigravityRulePath(dir);
     const kPath = antigravityKnowledgeSkillPath(dir);
+    const agentsPath = path.join(dir, "AGENTS.md");
     assert.ok(fs.existsSync(rPath));
     assert.ok(fs.readFileSync(rPath, "utf8").includes("ScopeCairn"));
     assert.ok(fs.existsSync(kPath));
     assert.ok(fs.readFileSync(kPath, "utf8").includes("name: scopecairn-knowledge"));
+    assert.ok(fs.existsSync(agentsPath));
+    assert.ok(fs.readFileSync(agentsPath, "utf8").includes("<!-- scopecairn:managed -->"));
+
     uninstallAntigravity(dir);
     assert.ok(!fs.existsSync(rPath));
     assert.ok(!fs.existsSync(kPath));
+    assert.ok(!fs.existsSync(agentsPath));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("antigravity: install ke repo dengan AGENTS.md mempertahankan detail proyek user", () => {
+  const dir = tmpRepo();
+  try {
+    const agentsPath = path.join(dir, "AGENTS.md");
+    fs.writeFileSync(agentsPath, "# Detail Proyek User\n- ini tidak boleh hilang\n");
+    const lines = installAntigravity(dir, "scopecairn");
+    assert.ok(lines.some((l) => l.includes("AGENTS.md merged")));
+    const content = fs.readFileSync(agentsPath, "utf8");
+    assert.ok(content.includes("# Detail Proyek User"));
+    assert.ok(content.includes("- ini tidak boleh hilang"));
+    assert.ok(content.includes("<!-- scopecairn:managed -->"));
+
+    // Uninstall hanya membersihkan blok managed, detail user tetap utuh
+    const unLines = uninstallAntigravity(dir);
+    assert.ok(unLines.some((l) => l.includes("AGENTS.md cleaned")));
+    assert.ok(fs.existsSync(agentsPath));
+    const after = fs.readFileSync(agentsPath, "utf8");
+    assert.ok(after.includes("# Detail Proyek User"));
+    assert.ok(after.includes("- ini tidak boleh hilang"));
+    assert.ok(!after.includes("<!-- scopecairn:managed -->"));
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -236,6 +296,33 @@ test("claude: rule mirroring .claude/rules/scopecairn.md ditulis saat install da
     assert.ok(fs.readFileSync(rulePath, "utf8").includes("ScopeCairn"));
     uninstallTarget(dir, claude);
     assert.ok(!fs.existsSync(rulePath));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("qoder: rule selalu aktif di .qoder/rules dan knowledge skill di .qoder/skills", () => {
+  const dir = tmpRepo();
+  try {
+    const qoder = findTarget("qoder")!;
+    assert.equal(qoder.rel, ".qoder/rules/scopecairn.md");
+    assert.equal(installTarget(dir, qoder, "scopecairn").how, "generated");
+
+    const rulePath = path.join(dir, ".qoder", "rules", "scopecairn.md");
+    assert.ok(fs.existsSync(rulePath));
+    const rule = fs.readFileSync(rulePath, "utf8");
+    assert.ok(rule.includes("ScopeCairn"));
+    // Qoder menerapkan rule tanpa frontmatter loading ke SETIAP sesi.
+    assert.ok(!rule.startsWith("---"));
+    assert.ok(!rule.includes("trigger:"));
+    const kPath = path.join(dir, ".qoder", "skills", "scopecairn-knowledge", "SKILL.md");
+    assert.ok(fs.existsSync(kPath));
+    assert.ok(fs.readFileSync(kPath, "utf8").includes("name: scopecairn-knowledge"));
+
+    const out = uninstallTarget(dir, qoder);
+    assert.equal(out.how, "removed");
+    assert.ok(!fs.existsSync(rulePath));
+    assert.ok(!fs.existsSync(kPath));
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

@@ -12,24 +12,59 @@ export interface Classification {
   reasons: string[];
   highFanin: string[];
   protectedHits: string[];
+  /** Estimasi LOC dari endLine-startLine simbol relevan (0 bila tak diketahui). */
+  estimatedLoc: number;
 }
 
 const FANIN_THRESHOLD = 5;
 
+/** Modul = 2 level direktori (mis. `src/retrieval`), bukan hanya top-dir. */
 function moduleOf(file: string): string {
-  const i = file.indexOf("/");
-  return i === -1 ? "." : file.slice(0, i);
+  const norm = file.replace(/\\/g, "/");
+  const parts = norm.split("/").filter(Boolean);
+  if (parts.length <= 1) return ".";
+  if (parts.length === 2) return parts[0]!;
+  return `${parts[0]}/${parts[1]}`;
 }
 
 export function classify(
   ranked: RankedSymbol[],
   faninOf: (id: number) => number,
   threshold = 0.15,
-  protectedPatterns?: string[]
+  protectedPatterns?: string[],
+  clusterOf?: (id: number) => string | undefined
 ): Classification {
   const relevant = ranked.filter((r) => r.score >= threshold);
   const files = [...new Set(relevant.map((r) => r.file))];
-  const modules = [...new Set(files.map(moduleOf))];
+  // Modul = 2-level dir + cluster (bila tersedia): dua file se-cluster dihitung
+  // satu modul meski beda dir, agar komunitas Louvain yang kohesif tak
+  // didakwa lintas-modul hanya karena perbedaan subdir kecil.
+  const clusterByFile = new Map<string, string>();
+  if (clusterOf) {
+    for (const r of relevant) {
+      const c = clusterOf(r.id);
+      if (c && !clusterByFile.has(r.file)) clusterByFile.set(r.file, c);
+    }
+    // Bila file berbeda punya cluster label sama, pakai label itu sebagai
+    // pengganti path modul agar modules.length tidak membengkak.
+    for (const [f, c] of clusterByFile) clusterByFile.set(f, `cluster:${c}`);
+  }
+  const modules = [
+    ...new Set(
+      files.map((f) => {
+        if (clusterByFile.has(f)) {
+          // Hanya pakai cluster bila minimal 2 file relevan berbagi cluster
+          // yang sama, atau file tak punya info path bermakna — bila cluster
+          // tunggal, tetap pakai moduleOf agar modul tetap stabil.
+          const same = files.filter(
+            (x) => clusterByFile.get(x) === clusterByFile.get(f)
+          ).length;
+          if (same >= 2) return clusterByFile.get(f)!;
+        }
+        return moduleOf(f);
+      })
+    ),
+  ];
   const reasons: string[] = [];
   // Fan-in hanya bermakna untuk simbol definisi; variable/noise regex dikecualikan.
   const DEFINITIONAL = new Set([
@@ -66,6 +101,16 @@ export function classify(
   }
   if (complexity === "SIMPLE") reasons.push(`estimasi ${files.length} file, 1 modul`);
 
+  // Estimasi LOC: jumlah baris pada simbol relevan (endLine-startLine+1).
+  // Simbol tanpa info baris (0/undefined) diabaikan — 0 berarti tak diketahui.
+  let estimatedLoc = 0;
+  for (const r of relevant) {
+    if (r.startLine && r.startLine > 0) {
+      const end = r.endLine && r.endLine >= r.startLine ? r.endLine : r.startLine;
+      estimatedLoc += end - r.startLine + 1;
+    }
+  }
+
   return {
     complexity,
     estimatedFiles: files.length,
@@ -73,5 +118,6 @@ export function classify(
     reasons,
     highFanin,
     protectedHits,
+    estimatedLoc,
   };
 }

@@ -55,6 +55,7 @@ export function openDb(repoRoot: string): DatabaseSyncType {
     CREATE INDEX IF NOT EXISTS idx_symbols_file ON symbols(file_id);
     CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(name);
     CREATE INDEX IF NOT EXISTS idx_symbols_type ON symbols(type);
+    CREATE INDEX IF NOT EXISTS idx_symbols_file_name_type ON symbols(file_id, name, type);
     CREATE TABLE IF NOT EXISTS relationships (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       source_id INTEGER NOT NULL REFERENCES symbols(id) ON DELETE CASCADE,
@@ -66,6 +67,7 @@ export function openDb(repoRoot: string): DatabaseSyncType {
     CREATE INDEX IF NOT EXISTS idx_rel_source ON relationships(source_id);
     CREATE INDEX IF NOT EXISTS idx_rel_target ON relationships(target_id);
     CREATE INDEX IF NOT EXISTS idx_rel_type ON relationships(relationship_type);
+    CREATE INDEX IF NOT EXISTS idx_rel_source_type ON relationships(source_id, relationship_type);
     CREATE TABLE IF NOT EXISTS meta (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
@@ -163,6 +165,17 @@ export function openDb(repoRoot: string): DatabaseSyncType {
     );
     CREATE VIRTUAL TABLE IF NOT EXISTS commit_fts USING fts5(
       sha UNINDEXED, subject, body, paths
+    );
+    -- Closed-loop learning: pasangan task -> file yang terbukti berubah saat verify lulus
+    CREATE TABLE IF NOT EXISTS verified_tasks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      task_id INTEGER REFERENCES tasks(id) ON DELETE SET NULL,
+      description TEXT NOT NULL UNIQUE,
+      files_json TEXT NOT NULL,
+      verified_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE VIRTUAL TABLE IF NOT EXISTS verified_tasks_fts USING fts5(
+      task_id UNINDEXED, description, files
     );
   `);
   db.prepare(

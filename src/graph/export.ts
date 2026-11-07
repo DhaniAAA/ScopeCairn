@@ -6,8 +6,34 @@ import { dataDir } from "../db.js";
 import { loadProtectedPatterns } from "../scope/protected.js";
 
 export const GRAPH_MD_NAME = "GRAPH.md";
-const MAX_ROWS = 20;
-const MAX_LINES = 160;
+export const MAX_ROWS = 20;
+export const MAX_LINES = 160;
+
+/** Anggaran GRAPH.md: param > env SCOPECAIRN_GRAPH_MAX_LINES > 160. */
+function resolveGraphMaxLines(budget?: number): number {
+  if (typeof budget === "number" && Number.isFinite(budget) && budget > 0) {
+    return Math.floor(budget);
+  }
+  const env = process.env.SCOPECAIRN_GRAPH_MAX_LINES;
+  if (env) {
+    const n = Number.parseInt(env, 10);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  return MAX_LINES;
+}
+
+/** Anggaran export graph (node cap): param > env SCOPECAIRN_EXPORT_BUDGET > 500. */
+function resolveExportBudget(budget?: number): number {
+  if (typeof budget === "number" && Number.isFinite(budget) && budget > 0) {
+    return Math.floor(budget);
+  }
+  const env = process.env.SCOPECAIRN_EXPORT_BUDGET;
+  if (env) {
+    const n = Number.parseInt(env, 10);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  return 500;
+}
 
 export interface GraphMeta {
   /** meta.last_scan (UTC `YYYY-MM-DD HH:MM:SS`) dinormalkan ke ISO; null bila tak ada. */
@@ -55,7 +81,14 @@ function freshnessLine(meta?: GraphMeta): string | null {
 // Peta pengetahuan beku untuk agent: ringkasan graph yang dibatasi anggaran.
 // BUKAN dump seluruh edge — file ini dimuat ke konteks, jadi tiap seksi
 // di-cap agar repo 100 ribu edge tetap jadi ±150 baris.
-export function buildGraphMd(db: DatabaseSync, repoRoot: string, meta?: GraphMeta): string {
+// Fase 4.5: `budget` = maxLines (default 160 tetap, bisa via env
+// SCOPECAIRN_GRAPH_MAX_LINES). Tanda tangan lama `(db, root, meta)` tetap valid.
+export function buildGraphMd(
+  db: DatabaseSync,
+  repoRoot: string,
+  meta?: GraphMeta,
+  budget?: number
+): string {
   const one = (sql: string): number => {
     try {
       return (db.prepare(sql).get() as { n: number }).n;
@@ -187,9 +220,10 @@ export function buildGraphMd(db: DatabaseSync, repoRoot: string, meta?: GraphMet
   }
 
   const out = lines.join("\n");
+  const maxLines = resolveGraphMaxLines(budget);
   const trimmed = out.split("\n");
-  if (trimmed.length > MAX_LINES) {
-    return trimmed.slice(0, MAX_LINES).join("\n") + "\n";
+  if (trimmed.length > maxLines) {
+    return trimmed.slice(0, maxLines).join("\n") + "\n";
   }
   return out;
 }
@@ -204,11 +238,12 @@ export function graphMdPath(repoRoot: string): string {
 export function writeGraphMdIfChanged(
   db: DatabaseSync,
   repoRoot: string,
-  dirty: boolean
+  dirty: boolean,
+  budget?: number
 ): boolean {
   if (!dirty) return false;
   try {
-    const next = buildGraphMd(db, repoRoot, readGraphMeta(db, repoRoot));
+    const next = buildGraphMd(db, repoRoot, readGraphMeta(db, repoRoot), budget);
     const abs = graphMdPath(repoRoot);
     try {
       const prev = fs.readFileSync(abs, "utf8");
@@ -243,8 +278,11 @@ function stripFreshness(md: string): string {
 
 export type ExportFormat = "mermaid" | "graphml" | "dot" | "json";
 
-const EXPORT_NODE_CAP = 500;
-const EXPORT_EDGE_CAP = 1500;
+// Anggaran default 500 node / 1500 edge (rasio 1:3). Fase 4.5: budget
+// (node cap) bisa via param atau env SCOPECAIRN_EXPORT_BUDGET; edgeCap ikut
+// proporsional agar output tetap terbaca. Param lama tetap valid.
+export const EXPORT_NODE_CAP = 500;
+export const EXPORT_EDGE_CAP = 1500;
 
 interface XNode {
   id: number;
@@ -260,22 +298,28 @@ interface XEdge {
   w: number;
 }
 
-function readExportGraph(db: DatabaseSync): { nodes: XNode[]; edges: XEdge[] } {
+function readExportGraph(
+  db: DatabaseSync,
+  budget?: number
+): { nodes: XNode[]; edges: XEdge[] } {
+  const nodeCap = resolveExportBudget(budget);
+  const edgeCap = nodeCap * 3;
   let nodes: XNode[] = [];
   try {
     // Prioritaskan simbol paling terhubung (fan-in + fan-out).
+    // LIMIT di-interpolasi dari nodeCap tervalidasi (integer >0, bukan input SQL liar).
     nodes = db.prepare(
       `SELECT s.id, s.name, s.type, f.path AS file,
               (SELECT COUNT(*) FROM relationships r WHERE r.target_id = s.id) +
               (SELECT COUNT(*) FROM relationships r WHERE r.source_id = s.id) AS deg
        FROM symbols s JOIN files f ON f.id = s.file_id
-       ORDER BY deg DESC LIMIT ${EXPORT_NODE_CAP}`
+       ORDER BY deg DESC LIMIT ${nodeCap}`
     ).all() as unknown as XNode[];
   } catch {
     try {
       nodes = db.prepare(
         `SELECT s.id, s.name, s.type, f.path AS file
-         FROM symbols s JOIN files f ON f.id = s.file_id LIMIT ${EXPORT_NODE_CAP}`
+         FROM symbols s JOIN files f ON f.id = s.file_id LIMIT ${nodeCap}`
       ).all() as unknown as XNode[];
     } catch {
       return { nodes: [], edges: [] };
@@ -288,11 +332,11 @@ function readExportGraph(db: DatabaseSync): { nodes: XNode[]; edges: XEdge[] } {
     edges = (
       db.prepare(
         `SELECT source_id AS s, target_id AS t, relationship_type AS rel,
-                weight AS w FROM relationships LIMIT ${EXPORT_EDGE_CAP * 4}`
+                weight AS w FROM relationships LIMIT ${edgeCap * 4}`
       ).all() as unknown as XEdge[]
     )
       .filter((e) => keep.has(e.s) && keep.has(e.t))
-      .slice(0, EXPORT_EDGE_CAP);
+      .slice(0, edgeCap);
   } catch {
     edges = [];
   }
@@ -316,8 +360,8 @@ function mermaidLabel(n: XNode): string {
 }
 
 /** Diagram Mermaid `graph TD` — cocok ditempel di PR/dokumentasi. */
-export function exportMermaid(db: DatabaseSync): string {
-  const { nodes, edges } = readExportGraph(db);
+export function exportMermaid(db: DatabaseSync, budget?: number): string {
+  const { nodes, edges } = readExportGraph(db, budget);
   const lines = ["graph TD"];
   for (const n of nodes) {
     lines.push(`    ${mermaidId(n.id)}["${mermaidLabel(n)}"]`);
@@ -330,8 +374,8 @@ export function exportMermaid(db: DatabaseSync): string {
 }
 
 /** GraphML standar (Gephi / Cytoscape). */
-export function exportGraphML(db: DatabaseSync): string {
-  const { nodes, edges } = readExportGraph(db);
+export function exportGraphML(db: DatabaseSync, budget?: number): string {
+  const { nodes, edges } = readExportGraph(db, budget);
   const out = [
     `<?xml version="1.0" encoding="UTF-8"?>`,
     `<graphml xmlns="http://graphml.graphdrawing.org/xmlns">`,
@@ -362,8 +406,8 @@ export function exportGraphML(db: DatabaseSync): string {
 }
 
 /** Graphviz DOT — render ke PDF/PNG via `dot -Tpng`. */
-export function exportDot(db: DatabaseSync): string {
-  const { nodes, edges } = readExportGraph(db);
+export function exportDot(db: DatabaseSync, budget?: number): string {
+  const { nodes, edges } = readExportGraph(db, budget);
   const q = (s: string): string => `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
   const lines = [`digraph scopecairn {`, `  rankdir=LR;`, `  node [shape=box, style=rounded];`];
   for (const n of nodes) {
@@ -377,8 +421,8 @@ export function exportDot(db: DatabaseSync): string {
 }
 
 /** Graph JSON AST untuk integrasi skrip kustom. */
-export function exportJson(db: DatabaseSync): string {
-  const { nodes, edges } = readExportGraph(db);
+export function exportJson(db: DatabaseSync, budget?: number): string {
+  const { nodes, edges } = readExportGraph(db, budget);
   return (
     JSON.stringify(
       {
@@ -394,15 +438,19 @@ export function exportJson(db: DatabaseSync): string {
   );
 }
 
-export function exportGraph(db: DatabaseSync, format: ExportFormat): string {
+export function exportGraph(
+  db: DatabaseSync,
+  format: ExportFormat,
+  budget?: number
+): string {
   switch (format) {
     case "mermaid":
-      return exportMermaid(db);
+      return exportMermaid(db, budget);
     case "graphml":
-      return exportGraphML(db);
+      return exportGraphML(db, budget);
     case "dot":
-      return exportDot(db);
+      return exportDot(db, budget);
     case "json":
-      return exportJson(db);
+      return exportJson(db, budget);
   }
 }

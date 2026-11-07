@@ -1,69 +1,41 @@
-// Template tiga lapisan auto-invocation (PRD §8.3). `{prefix}` diisi
-// `scopecairn` atau `npx scopecairn` oleh init agar identik di semua
-// lapisan + allowlist (AI-9).
+// Three-layer auto-invocation template (PRD §8.3). `{prefix}` is populated with
+// `scopecairn` or `npx scopecairn` by init so it is identical across all layers
+// + allowlist (AI-9).
 
 export const MARKER = "<!-- scopecairn:managed -->";
-
 function ruleBody(prefix: string): string {
-  return `# ScopeCairn — Protokol Engineering Otomatis
+  return `# ScopeCairn — Automated Engineering Protocol
 
-## 1. Sikap Kerja Otomatis (Anti-Slop & Laziness Protocol)
-Patuhi prinsip ini di setiap baris kode secara otomatis tanpa perlu diminta user:
-- **Laziness Protocol (Minimal Diff)**: Buat perubahan sekecil mungkin yang menyelesaikan masalah. Prioritaskan penghapusan kode (bias to deletion). Dilarang membuat layer abstraksi, wrapper, atau interface tambahan yang tidak diminta.
-- **Anti-AI Slop**: Hapus komentar naratif yang menceritakan langkah kerja (seperti \`// Step 1: add x\`, \`// Phase 2\`). Kode harus mendokumentasikan dirinya sendiri melalui penamaan fungsi, tipe yang presisi, dan assertions. Hindari gaya tulisan AI klise/basa-basi.
-- **Boundary & Type Discipline**: Validasi ketat di perbatasan sistem (I/O, argumen CLI, API), dan pertahankan core logic tetap murni (pure functions).
-- **Perlindungan Konteks Historis (Why Guard)**: Jangan menghapus kode penanganan kasus khusus yang tampak janggal sebelum mengecek git history/blame, agar tidak membangkitkan bug lama.
+## 1. Discipline (Anti-Slop & Laziness Protocol)
+- **Minimal Diff**: Smallest change that solves the problem; bias to deletion; no unrequested abstractions or narrative step comments.
+- **Boundaries & History**: Validate at I/O/CLI boundaries; keep core logic pure; check git blame before deleting unusual edge-case guards.
 
-## 2. Inisialisasi Task & Pemanggilan Context
-- **Cold start**: Jika \`.scopecairn/scopecairn.db\` belum ada di repository, jalankan \`${prefix} init\` terlebih dahulu untuk memetakan codebase.
-- **Jalankan \`${prefix} context "<query>"\` HANYA JIKA**:
-  1. Memulai fitur baru / bugfix yang belum diketahui letak file dan simbolnya di codebase.
-  2. Ingin menetapkan scope pengeditan untuk verifikasi.
-- **LEWATI \`${prefix} context\` JIKA**:
-  1. User sudah menyebutkan target file atau fungsinya secara spesifik (misal: "perbaiki bug di src/retrieval/tokenize.ts"). Agent bisa langsung membaca simbol/file tersebut tanpa search context.
-  2. Pertanyaan berupa diskusi konseptual, code review, arsitektur, atau sekadar tanya jawab.
-  3. Melanjutkan percakapan dalam sesi yang sama di mana scope file sudah diketahui.
-- **Ekstraksi Query**: Jika prompt user panjang atau berupa spesifikasi kompleks, jangan masukkan seluruh paragraf ke terminal. Ambil 2–4 kata kunci teknis utama (nama modul, entitas, aksi) sebagai argumen context untuk mencari file jangkar (anchor), sementara detail spesifikasi lengkap tetap diikuti langsung dari prompt user.
-- **Transparansi Status (Status Cue 1-Baris)**: Awali baris pertama setiap respon task coding dengan penanda ringkas status ScopeCairn agar user mengetahui status scope secara transparan:
-  - Jika context dipanggil: \`> 🧭 [ScopeCairn: context "<query>" → N files in scope]\`
-  - Jika context dilewati: \`> 🧭 [ScopeCairn: scope known (<alasan singkat, misal: target file sudah spesifik>), context skipped]\`
-  - Jika impact dijalankan: \`> 🧭 [ScopeCairn: impact <path> checked]\`
-  - Jika verify dijalankan: \`> 🧭 [ScopeCairn: verify passed within scope]\`
+## 2. Context Retrieval & Status Cue
+- **First line of EVERY response**:
+  - Called context: \`> 🧭 [ScopeCairn: context "<query>" → N files in scope]\`
+  - Skipped context: \`> 🧭 [ScopeCairn: scope known (<reason>), context skipped]\`
+  - Checked impact / verified: \`> 🧭 [ScopeCairn: impact <path> checked]\` / \`> 🧭 [ScopeCairn: verify passed within scope]\`
+- **Cold start**: If \`.scopecairn/scopecairn.db\` is missing, run \`${prefix} init\`. At the start of a session, run \`${prefix} session load\` to restore previous working state and git drift.
+- **Run \`${prefix} context "<2-4 technical keywords>"\` ONLY IF** target files/symbols are unknown or locking edit scope. If results are empty/off-target, run \`${prefix} map [dir]\` then \`${prefix} context --anchor <path> "<query>"\`.
+- **SKIP \`${prefix} context\` IF**: (1) user named the target file/symbol, (2) prompt is Q&A/architecture/review, or (3) scope is already known in this session.
+- **Retrieval Options**: Use \`${prefix} context --explain\` for score breakdown (wSeed*seed, prox, cent, recency, cochange, ppr, pr), \`${prefix} context --format brief\` for 1-line-per-file human copy, \`${prefix} context --format table|tree|mermaid\` for tables/trees/call-paths.
 
-Gunakan hasilnya sebagai titik awal. Jangan menjelajah repository dari nol.
-
-## 3. Selama Pengerjaan
-- **Batas Scope**: Ubah hanya file di daftar Required dan Optional. Jangan sentuh file di daftar Protected tanpa persetujuan user. Bila ternyata lebih dari 2 file harus diubah, panggil ulang: \`${prefix} context --escalate "<query>"\`.
-- **Blast Radius & Safety Fact**: Sebelum mengubah simbol/file yang dipakai banyak tempat (fan-in tinggi):
-  1. Jalankan \`${prefix} impact <path>\` untuk melihat pemanggil dan tes terdampak.
-  2. Rumuskan 1 fakta penjamin keamanan (*the one safety fact it is safe because of*).
-  3. Buktikan fakta tersebut dengan menjalankan tes terkait (\`${prefix} impact <path> --run-tests\` atau test runner) sebelum lanjut.
-- **Anti-Looping Bug Fix (Attack the Premise)**: Jika 2 kali percobaan perbaikan bug berturut-turut gagal pada tes yang sama, DILARANG mencoba cara ke-3 dengan asumsi yang sama. Berhenti sejenak, tuliskan premis/asumsi dasarnya, dan uji penyebab akar secara independen sebelum menyentuh kode lagi.
-- **Eksperimen Mandiri (Empirical Fork / Prototype)**: Jika ada keraguan antara 2 pendekatan teknis, jangan bertanya hal spekulatif ke user. Buat skrip tes kecil / amati perilakunya langsung untuk menentukan pilihan berdasarkan bukti nyata.
-- **Scripting over Manual Edits (Build the Lever)**: Jika task menyentuh perubahan pola serupa di >3 file, jangan edit manual satu per satu: buat skrip pembantu / codemod sederhana, jalankan sekaligus, lalu verifikasi via git diff.
-- **Source Simbol**: Gunakan \`${prefix} read symbol <nama>\` alih-alih membaca file penuh.
-
-## 4. Sebelum Menyatakan Selesai (Self-Review & Verification)
-1. **Adversarial Self-Review (Interrogate)**: Sebelum melapor selesai, serang kode sendiri:
-   - Kasus ekstrem: apakah input null, undefined, kosong, atau sangat besar ditangani dengan aman?
-   - Asynchronous & Resource: apakah ada potensi race condition, unhandled rejection, atau resource leak?
-   - Kompatibilitas OS: pastikan path separator dan shell command aman di Windows dan Linux.
-2. **Prove It Works**:
-   - *Bug Fix*: Buktikan dengan test reproduksi (gagal sebelum fix, lulus sesudah fix).
-   - *Refactoring*: Buktikan semua test yang ada tetap lulus tanpa memodifikasi assertion test hanya agar hijau.
-   - *Feature*: Pastikan tipe/data shape tervalidasi dan ada test verifikasi perilaku.
-3. **Verifikasi Akhir**:
-   - Jalankan \`${prefix} scan\` agar indeks ScopeCairn mencerminkan perubahanmu.
-   - Cek scope: \`${prefix} verify --task "<query>" --strict\`
-     — membandingkan file yang berubah terhadap scope yang tadi dipakai.
-     Kalau ada file di luar Required/Optional, kembalikan ke dalam scope atau minta persetujuan user. Jangan diamkan.
-4. **Catat Keputusan**: Ada keputusan arsitektur yang disepakati? Catat sekali: \`${prefix} decide "<pilihan> karena <alasan>"\` — tersimpan dengan bukti dan ikut terbaca di setiap context berikutnya.
+## 3. Execution & Verification
+- **Scope**: Edit only Required/Optional files; never touch Protected without approval. If >2 files change, run \`${prefix} context --escalate "<query>"\`.
+- **Reuse Check**: Before creating a new function or class, run \`${prefix} reuse "<description or signature>"\` and reuse/extend existing symbols when matched.
+- **Shared Symbols**: Run \`${prefix} impact <path>\`, state 1 safety fact, and prove it via \`${prefix} impact <path> --run-tests\`.
+- **Anti-Looping**: 2 failed fixes on the same test → stop and test the root-cause premise independently before a 3rd edit.
+- **Excerpts**: Prefer \`${prefix} read symbol <name>\` or line-ranged reads from \`context\` over full-file reads. Multi-symbol: \`${prefix} read symbol a b c\` with \`--full\`/\`--with-callers\`.
+- **Scan Fast Path**: Run \`${prefix} scan --changed-only\` for incremental git-aware rescan; \`${prefix} scan --lsp\` only when LSP (tsserver/gopls/pyright) is available.
+- **PR Risk**: Before merge, run \`${prefix} verify --pr-risk --sarif --base origin/main\` for aggregate HIGH/MED/LOW risk + SARIF output. \`--pr-risk --json\` includes full report.
+- **Dependencies**: Run \`${prefix} deps\` (offline) to check unused/outdated from manifests (package.json/pyproject.toml/go.mod/Cargo.toml).
+- **Before Done**: Self-review edge/async/OS cases, prove with tests (never weaken tests by removing assertions, adding \`.skip\`, or loosening matchers), then run \`${prefix} scan\`, \`${prefix} dead\`, \`${prefix} verify --task "<query>" --strict --test-gate\`, and \`${prefix} session save --working "<summary>" --decisions "<decisions>" --next "<next>" --blockers "<blockers>" --files "<files>"\`. Never bypass git pre-commit hooks with \`--no-verify\`; teams should also enforce \`${prefix} verify --test-gate --base origin/main\` in CI. Coverage: per-symbol coverage is stored (see testGate); retrieval weights tuned via \`${prefix} benchmark --tune\` (nDCG/MRR).
+- **Decisions**: Record settled architectural choices via \`${prefix} decide "<choice> because <why>"\` — stored with evidence and included in all future contexts.
+- **Coverage**: Supported languages: TS/JS/Python/Java/Go/Rust/PHP/C#/C/C++/Ruby/HTML/Vue/Kotlin/Dart/Shell/SQL/GraphQL/Proto. Frameworks: Prisma/Drizzle/SQLAlchemy/Next.js/Express/FastAPI/NestJS/Django/Vue/Fastify/Koa/Hono/Rails/Laravel/Spring/Go.
 `;
 }
 
-// Skill Claude (project skill + plugin skill): frontmatter dibatasi // spec Agent Skills agar portabel (skills.sh, claude.ai upload). Pemicu
-// ditulis di description (batas listing 1536 char). allowed-tools: Bash
-// memberi pra-persetujuan bash selama giliran skill (docs/skills).
+// Claude skill (project skill + plugin skill): frontmatter bounded by Agent Skills spec for portability.
 export function claudeSkillMd(prefix: string): string {
   return `---
 name: scopecairn
@@ -77,15 +49,15 @@ allowed-tools: Bash
 ${ruleBody(prefix)}`;
 }
 
-// Aturan generik untuk file merge lain (copilot, dsb).
+// Generic rule for other merge files (copilot, etc).
 export function genericRuleMd(prefix: string): string {
   return `${MARKER}\n${ruleBody(prefix)}`;
 }
 
-// Cursor memakai frontmatter .mdc agar selalu diterapkan.
+// Cursor uses .mdc frontmatter so it is always applied.
 export function cursorRuleMdc(prefix: string): string {
   return `---
-description: ScopeCairn codebase rules — panggil scopecairn context saat file target belum diketahui
+description: ScopeCairn codebase rules — call scopecairn context when target files are unknown
 alwaysApply: true
 ---
 
@@ -96,7 +68,7 @@ ${ruleBody(prefix)}`;
 export function skillMd(prefix: string): string {
   return `---
 name: scopecairn
-description: ScopeCairn codebase context + scope + engineering rigor. Gunakan untuk task coding bila letak file belum diketahui atau untuk menetapkan scope verifikasi.
+description: ScopeCairn codebase context + scope + engineering rigor. Use for coding tasks when target files are unknown or to enforce verification scope.
 ---
 
 ${ruleBody(prefix)}`;
@@ -105,70 +77,75 @@ ${ruleBody(prefix)}`;
 export function workflowMd(prefix: string): string {
   return `# /scopecairn
 
-Shortcut manual bila agent lupa menjalankan protokol otomatis ScopeCairn.
+Manual shortcut if the agent forgets to run the automated ScopeCairn protocol.
 
-Prinsip Otomatis:
-- Laziness Protocol (diff minimal, no slop, dilarang menambah layer abstraksi baru).
-- Blast Radius: Simbol bersama wajib impact + safety fact + buktikan dengan tes.
-- Anti-Looping: 2x gagal perbaiki bug pada tes yang sama → dilarang coba cara ke-3 dengan asumsi serupa; serang premis dasar secara independen.
-- Prove It Works: Selalu buktikan perbaikan/fitur dengan tes nyata sebelum menyatakan selesai.
-- Transparansi Status: Awali respon dengan 1 baris penanda scope, misal: \`> 🧭 [ScopeCairn: ...]\`.
+Automated Principles:
+- Laziness Protocol (minimal diff, no slop, never add unnecessary abstraction layers).
+- Blast Radius: Shared symbols require impact + safety fact + proof via tests.
+- Anti-Looping: 2x failure on the same test → stop and attack underlying premises independently before a 3rd try.
+- Prove It Works: Always prove fixes/features with real tests before declaring completion.
+- Status Cue: Start response with a 1-line scope indicator, e.g. \`> 🧭 [ScopeCairn: ...]\`.
 
-Langkah Alur Kerja:
-1. Jika prompt user panjang/kompleks, ambil 2–4 kata kunci teknis utama sebagai argumen context.
-2. Jalankan \`${prefix} context "<kata kunci teknis>"\` (jika file target belum diketahui atau untuk mengunci scope).
-3. Ikuti Relevant Files dan Task Scope (Required & Optional; dilarang sentuh Protected tanpa izin).
-4. Perlu periksa dampak perubahan? \`${prefix} impact <path> --run-tests\`.
-5. Perlu source simbol? \`${prefix} read symbol <nama>\`.
-6. Keputusan arsitektur disepakati? \`${prefix} decide "<pilihan> karena <alasan>"\`.
-7. Sebelum menyatakan selesai:
-   - Adversarial self-review: periksa input null/undefined/edge-cases, async race condition, kompatibilitas OS.
-   - Buktikan perubahan dengan test nyata.
-   - Jalankan \`${prefix} scan\`, lalu \`${prefix} verify --task "<kata kunci teknis>" --strict\`
-     — memastikan file yang diubah tidak bocor ke luar scope.
+Workflow Steps:
+1. At the start of a session, run \`${prefix} session load\` to inspect previous state and commits/files changed since the last save.
+2. If user prompt is long/complex, extract 2–4 technical keywords as context arguments.
+3. Run \`${prefix} context "<technical keywords>"\` (if target files are unknown or to lock scope). For score debugging, add \`--explain\`; for human copy, add \`--format brief|table|tree|mermaid\`; for fast rescan after a small change, prefer \`scan --changed-only\`.
+4. Follow Relevant Files and Task Scope (Required & Optional; never touch Protected without approval).
+5. Before creating a new function or class, run \`${prefix} reuse "<description or signature>"\`.
+6. Need to check impact of changes? \`${prefix} impact <path> --run-tests\`.
+7. Need symbol source code? \`${prefix} read symbol <name>\` (multi: \`${prefix} read symbol a b c --full --with-callers\`).
+8. Check dependencies? \`${prefix} deps\` (offline, from manifests).
+9. Before PR/merge? \`${prefix} verify --pr-risk --sarif --base origin/main\`.
+10. Architectural decision settled? \`${prefix} decide "<choice> because <why>"\`.
+11. Before declaring completion:
+   - Adversarial self-review: check null/undefined/edge-cases, async race conditions, OS compatibility.
+   - Prove changes with real tests.
+   - Run \`${prefix} scan\`, \`${prefix} dead\`, then \`${prefix} verify --task "<technical keywords>" --strict\`
+     — ensuring no dead code was introduced and modified files did not leak outside scope.
+   - Save session state via \`${prefix} session save --working "<summary>" --decisions "<decisions>" --next "<next>" --blockers "<blockers>" --files "<files>"\`.
+Prereq (CI): \`scan --lsp\` only when LSP exists; \`benchmark --tune\` reports nDCG/MRR for weight calibration.
 `;
 }
 
 // OpenCode custom command (docs/commands): \`.opencode/commands/*.md\`
-// dengan frontmatter + $ARGUMENTS. AGENTS.md tetap dibaca OpenCode (docs/rules).
+// with frontmatter + $ARGUMENTS. AGENTS.md is still read by OpenCode (docs/rules).
 export function opencodeCommandMd(prefix: string): string {
   return `---
 description: ScopeCairn codebase context + scope + engineering rigor for a task
 ---
 
-Run \`${prefix} context "$ARGUMENTS"\` with the bash tool (extract 2-4 technical keywords if query is complex), then:
+Run \`${prefix} session load\` at the start of the session, then run \`${prefix} context "$ARGUMENTS"\` with the bash tool (extract 2-4 technical keywords if query is complex), then:
 
 1. Always show a 1-line status cue at the start of your response, e.g. \`> 🧭 [ScopeCairn: context "$ARGUMENTS" → N files]\` (or explain if skipped).
 2. Use Relevant Files as the starting point — do not explore from zero.
 3. Change only Required and Optional files; Protected needs user approval.
-4. If shared symbols change, run \`${prefix} impact <path>\`, formulate one safety fact, and verify with tests.
-5. If bug fix fails 2x on the same test, stop and attack the premise independently before attempting a 3rd time.
-6. Need a function body? Use \`${prefix} read symbol <nama>\`, not full reads.
-7. Before finishing: perform adversarial self-review, ensure real tests pass, run \`${prefix} scan\`, then run \`${prefix} verify --task "$ARGUMENTS" --strict\` to catch out-of-scope files.
-8. Settled an architectural decision? Record it once: \`${prefix} decide "<choice> because <why>"\`.
+4. Before creating a new function or class, run \`${prefix} reuse "<description or signature>"\`.
+5. If shared symbols change, run \`${prefix} impact <path>\`, formulate one safety fact, and verify with tests.
+6. If bug fix fails 2x on the same test, stop and attack the premise independently before attempting a 3rd time.
+7. Need a function body? Use \`${prefix} read symbol <name> [more...] --full --with-callers\`, not full reads.
+8. Before finishing: perform adversarial self-review, ensure real tests pass, run \`${prefix} scan\` (or \`scan --changed-only\` for speed), run \`${prefix} dead\`, run \`${prefix} verify --task "$ARGUMENTS" --strict\` (or \`verify --pr-risk --sarif --base origin/main\` before PR), run \`${prefix} deps\` for dependency health, and run \`${prefix} session save\`.
+9. Settled an architectural decision? Record it once: \`${prefix} decide "<choice> because <why>"\`.
 <!-- scopecairn:managed -->
 `;
 }
 
-// Snippet izin opencode.json (docs/permissions). DICETAK, tidak ditulis
-// otomatis: opencode.json adalah JSONC (boleh berkomentar) dan milik user —
-// merge otomatis berisiko merusak konfigurasi yang ada.
+// OpenCode permission guide snippet (docs/permissions). Printed only, not auto-written:
+// opencode.json is JSONC (allows comments) and user-owned — auto-merge risks corruption.
 export function opencodePermissionGuide(prefix: string): string {
   const rules = ALLOWLIST_COMMANDS.map(
     (c) => `      "${prefix} ${c} *": "allow"`
   ).join(",\n");
   return (
-    `Agar command di atas jalan tanpa persetujuan, gabungkan ke opencode.json\n` +
-    `(project root atau ~/.config/opencode/opencode.json):\n\n` +
+    `To allow the commands above to run without approval prompts, merge this into opencode.json\n` +
+    `(project root or ~/.config/opencode/opencode.json):\n\n` +
     `{\n  "permission": {\n    "bash": {\n${rules}\n    }\n  }\n}\n\n` +
-    `Catatan: ScopeCairn tidak mengubah opencode.json Anda secara otomatis.`
+    `Note: ScopeCairn does not modify your opencode.json automatically.`
   );
 }
 
-// Skill khusus knowledge agent (explain/summarize/audit — read-only).
-// Satu body untuk semua agent supaya salinan tidak menyimpang; hanya varian
-// "claude" yang memuat `allowed-tools` (grant spesifik Agent Skills Claude,
-// bukan field spec skill di tool lain).
+// Dedicated knowledge agent skill (explain/summarize/audit — read-only).
+// Single shared body across agents to keep copies synchronized; only "claude"
+// includes allowed-tools (Claude Agent Skills specific grant).
 export function knowledgeSkillMd(
   prefix: string,
   variant: "portable" | "claude" = "portable"
@@ -183,91 +160,107 @@ ${tools}---
 
 # ScopeCairn — Knowledge Mode (ReAct)
 
-Reasoning loop: Thought → Action → Observe, max 3 iterasi. Semua Action
-read-only terhadap source; ScopeCairn hanya menulis ke \`.scopecairn/\`.
+Reasoning loop: Thought → Action → Observe, max 3 iterations. All Actions are
+read-only to the source code; ScopeCairn only writes to \`.scopecairn/\`.
 
-Iteration 0 — Cold start (lewati yang tidak ada):
-Thought: apa yang sudah diketahui repo ini tanpa query apa pun?
-Action: baca berurutan:
-- \`.scopecairn/GRAPH.md\` — peta graph berbudget: modul, simbol paling dipakai,
-  hotspot PageRank, siklus, rute, model, protected.
-- \`.scopecairn/ARCHAEOLOGY.md\` — kepemilikan/bus factor/churn dari git log lokal
-  (snapshot sekali tulis; hapus file untuk regenerasi).
-- \`.scopecairn/decisions.md\` — keputusan arsitektur yang tercatat (dicatat
-  user/agent lewat \`${prefix} decide\`), bila ada.
-Observe freshness: GRAPH.md memuat baris
-\`> Freshness: scanned <ISO> · HEAD <sha>\` (bila tidak ada — mis. index lama —
-lewati cek ini). Bila ada, bandingkan <sha> dengan \`git rev-parse --short HEAD\`;
-bila berbeda, sebut peta mungkin usang dan percayai command live untuk yang
-berubah. Cold start = orientasi, bukan jawaban.
+Iteration 0 — Cold start (skip any missing artifacts):
+Thought: what is already known about this repo without running any queries?
+Action: read in order:
+- \`.scopecairn/GRAPH.md\` — budgeted graph map: modules, most-used symbols,
+  PageRank hotspots, cycles, routes, models, protected files.
+- \`.scopecairn/ARCHAEOLOGY.md\` — ownership / bus factor / churn from local git log
+  (write-once snapshot; delete the file to regenerate).
+- \`.scopecairn/decisions.md\` — recorded architectural decisions (logged by
+  user/agent via \`${prefix} decide\`), if any.
+Observe freshness: GRAPH.md contains the line
+\`> Freshness: scanned <ISO> · HEAD <sha>\` (if missing — e.g. legacy index —
+skip this check). If present, compare <sha> with \`git rev-parse --short HEAD\`;
+if different, note that the map may be outdated and rely on live commands for
+modified areas. Cold start = orientation, not the answer.
 
 Iteration 1 — Scope:
-Thought: apa yang sebenarnya ditanyakan?
-Action: \`${prefix} context --knowledge "<pertanyaan user>" --json\`
-Observe: cek \`high\`, \`medium\`, \`symbols[0].score\`, \`analogs\`, \`empty\`.
-- \`high\` DAN \`medium\` kosong / semua score <0.15 → reformulasi sekali (alias
-  domain dari \`.scopecairn/glossary.yml\`, pecah jadi 2 sub-pertanyaan), lalu
-  lanjut dari cold start — jangan berhenti.
-- \`high\` kosong tapi \`medium\` berisi → normal untuk task SIMPLE; lanjut.
-- \`analogs\` = commit yang menyentuh area sama: bukti "kenapa". Kutip
+Thought: what is actually being asked?
+Action: \`${prefix} context --knowledge "<user question>" --json\`
+Observe: check \`high\`, \`medium\`, \`symbols[0].score\`, \`analogs\`, \`empty\`.
+- Both \`high\` AND \`medium\` empty / all scores <0.15 → reformulate once (domain
+  aliases from \`.scopecairn/glossary.yml\`, split into 2 sub-questions), then
+  continue from cold start — do not halt.
+- \`high\` empty but \`medium\` has entries → normal for SIMPLE tasks; proceed.
+- \`analogs\` = commits touching the same area: evidence of "why". Quote
   \`shortSha + subject\`.
-- Keputusan arsitektur: pada output markdown sudah terlampir di akhir
-  (\`## Keputusan Arsitektur\`); pada \`--json\` baca \`.scopecairn/decisions.md\`
-  langsung (envelope JSON tidak memuatnya).
+- Architectural decisions: attached at the end of markdown output
+  (\`## Architectural Decisions\`); for \`--json\`, read \`.scopecairn/decisions.md\`
+  directly (the JSON envelope omits it).
 
 Iteration 2 — Expand:
-Thought: simbol mana yang perlu trace relasi?
-Action (pilih seperlunya, selalu \`--json\`):
-- Relasi modul: \`${prefix} graph <symbol> --json\`
-- Dampak: \`${prefix} impact <path> --json\`
-- Alur A→B: \`${prefix} graph <from> --to <to> --json\`
-Observe: sambungkan hop via \`edges[].rel\` (\`graph\`) atau \`hops[].rel\`
-(\`graph --to\`) — rel CALLS/IMPORTS/QUERIES.
-Stop bila rantai sudah menjawab "kenapa / bagaimana".
+Thought: which symbols need relationship tracing?
+Action (choose as needed, always \`--json\`):
+- Module relations: \`${prefix} graph <symbol> --json\` (add \`--budget <n>\` for large monorepos)
+- Blast radius / impact: \`${prefix} impact <path> --json\`
+- Flow A→B: \`${prefix} graph <from> --to <to> --json\`
+- Dependencies: \`${prefix} deps --json\` (offline manifest health)
+Observe: connect hops via \`edges[].rel\` (\`graph\`) or \`hops[].rel\`
+(\`graph --to\`) — relationships CALLS/IMPORTS/QUERIES/ROUTES_TO. Ranking is
+5-signal + PageRank/PPR (\`wSeed/wProximity/wCentrality/wRecency/wCochange\`
+plus optional PPR/PR); use \`context --explain --format brief\` to inspect.
+Coverage: languages TS/JS/Python/Java/Go/Rust/PHP/C#/C/C++/Ruby/HTML/Vue/
+Kotlin/Dart/Shell/SQL/GraphQL/Proto; frameworks Prisma/Drizzle/SQLAlchemy/
+Next.js/Express/FastAPI/NestJS/Django/Vue/Fastify/Koa/Hono/Rails/Laravel/
+Spring/Go.
+Stop when the chain answers "why / how".
 
 Iteration 3 — Ground:
-Thought: apa bukti historis / source-nya?
+Thought: what is the historical / source evidence?
 Action:
-- \`${prefix} history "<pertanyaan>" --json\` untuk keputusan + co-change
-  (\`empty: true\` = tidak ada analog — jangan dipaksa).
-- \`${prefix} read symbol <nama> --json\` untuk excerpt (bukan baca file penuh).
-Observe: kutip \`shortSha + subject\` dan \`file:range\` sebagai bukti.
+- \`${prefix} history "<question>" --json\` for decisions + co-changes
+  (\`empty: true\` = no analogs — do not force).
+- \`${prefix} read symbol <name> --json\` for excerpts (do not read full files).
+Observe: quote \`shortSha + subject\` and \`file:range\` as evidence.
 
-Stop rules: berhenti saat jawaban cukup, atau 3 iterasi, atau \`high\` stabil
-antar iterasi. Bentuk jawaban: jawaban dulu, lalu bukti (\`file:line\`,
-\`shortSha + subject\`), lalu pertanyaan terbuka. Setiap klaim butuh bukti dari
-command di atas — artefak cold start adalah orientasi, bukan bukti per-task.
-Jangan menulis atau mengubah file — hanya baca, rangkum, dan jelaskan.
+Stop rules: stop when the answer is complete, or 3 iterations reached, or \`high\`
+is stable across iterations. Answer structure: direct answer first, followed by
+evidence (\`file:line\`, \`shortSha + subject\`), then open questions. Every claim
+requires evidence from the commands above — cold start artifacts provide
+orientation, not per-task proof. Never write or modify files — only read,
+summarize, and explain.
 `;
 }
 
-// Perintah aman untuk allowlist (AI-8: read-only terhadap source,
-// hanya menulis ke `.scopecairn/`). `history` ikut walau alias tersembunyi —
-// skill knowledge memakainya untuk bukti "kenapa".
+// Safe commands for allowlist (read-only to source code, only writes to \`.scopecairn/\`).
+// \`history\` is included even though it is a hidden alias — the knowledge skill uses it for "why" evidence.
 export const ALLOWLIST_COMMANDS = [
   "context",
+  "reuse",
+  "dead",
+  "session",
   "impact",
   "read",
   "graph",
   "history",
   "status",
   "verify",
+  "deps",
+  "benchmark",
+  "doctor",
+  "map",
+  "diff",
+  "archcheck",
+  "export",
 ] as const;
 
-// `decide` sengaja TIDAK masuk allowlist: isinya prosa yang ikut disuntikkan
-// ke setiap prompt `context` berikutnya, jadi agent tidak boleh menulisnya
-// tanpa persetujuan user per panggilan.
+// \`decide\` is intentionally NOT in the allowlist: its prose is injected into every
+// subsequent \`context\` prompt, so agents must never write to it without per-call user approval.
 export const MANUAL_ONLY_COMMANDS = ["init", "scan", "decide"] as const;
 
 export function allowlistGuide(prefix: string): string {
   const lines = ALLOWLIST_COMMANDS.map((c) => `  ${prefix} ${c}`);
   return (
-    `Agar agent dapat memakai ScopeCairn tanpa persetujuan per panggilan,\n` +
-    `tambahkan entri berikut ke Terminal Allow List Antigravity\n` +
+    `To allow the agent to run ScopeCairn without approval prompts,\n` +
+    `add the following entries to your Antigravity Terminal Allow List\n` +
     `(Settings → Advanced Settings → Terminal):\n\n` +
     lines.join("\n") +
-    `\n\nCatatan: ScopeCairn tidak mengubah pengaturan IDE Anda secara otomatis.\n` +
-    `\`decide\` sengaja tidak ada di daftar: isinya terbaca di setiap context\n` +
-    `berikutnya, jadi biarkan lewat persetujuan Anda per panggilan.`
+    `\n\nNote: ScopeCairn does not modify your IDE settings automatically.\n` +
+    `\`decide\` is intentionally omitted: its content is injected into every subsequent\n` +
+    `context call, so it should always require explicit user approval.`
   );
 }

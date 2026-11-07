@@ -65,10 +65,43 @@ export async function cmdStatus(repoRoot: string, opts: StatusOptions = {}): Pro
     }
     console.log(`Last scan: ${lastScan}`);
     try {
+      const deltaRow = db.prepare(`SELECT value FROM meta WHERE key = 'last_scan_delta'`).get() as { value: string } | undefined;
+      if (deltaRow) {
+        try {
+          const d = JSON.parse(deltaRow.value) as Record<string, number>;
+          console.log(
+            `Scan delta: +${d.inserted ?? 0} new, ~${d.updated ?? 0} updated, =${d.unchanged ?? 0} unchanged, -${d.removed ?? 0} removed (${(Number(d.durationMs ?? 0) / 1000).toFixed(2)}s)`
+          );
+        } catch {
+          console.log(`Scan delta: (unparseable)`);
+        }
+      }
+    } catch {
+      // meta tak tersedia — lewati diam-diam
+    }
+    try {
+      let faninN = -1;
+      let metricsN = -1;
+      let cyclesN = -1;
+      try { faninN = (db.prepare(`SELECT COUNT(*) AS n FROM fanin`).get() as { n: number }).n; } catch { faninN = -1; }
+      try { metricsN = (db.prepare(`SELECT COUNT(*) AS n FROM node_metrics`).get() as { n: number }).n; } catch { metricsN = -1; }
+      try { cyclesN = (db.prepare(`SELECT COUNT(*) AS n FROM cycles`).get() as { n: number }).n; } catch { cyclesN = -1; }
+      const fmtCache = (n: number): string => (n < 0 ? "n/a" : n > 0 ? `hit (${n} rows)` : "cold (0 rows)");
+      console.log(`Cache: fanin ${fmtCache(faninN)}, node_metrics ${fmtCache(metricsN)}, cycles ${fmtCache(cyclesN)}`);
+    } catch {
+      // tabel cache tak tersedia — lewati
+    }
+    try {
       const commits = (db.prepare(`SELECT COUNT(*) AS n FROM commits`).get() as { n: number }).n;
       if (commits > 0) console.log(`History: ${commits} commits`);
     } catch {
       // pre-history DB
+    }
+    try {
+      const verified = (db.prepare(`SELECT COUNT(*) AS n FROM verified_tasks`).get() as { n: number }).n;
+      if (verified > 0) console.log(`Verified tasks: ${verified}`);
+    } catch {
+      // pre-learning DB
     }
     try {
       const paths = (

@@ -9,6 +9,7 @@ import { cmdPath } from "./commands/path.js";
 import { cmdExport } from "./commands/export.js";
 import { cmdRead } from "./commands/read.js";
 import { cmdContext } from "./commands/context.js";
+import { cmdMap } from "./commands/map.js";
 import { cmdHistory } from "./commands/history.js";
 import { cmdImpact } from "./commands/impact.js";
 import { cmdInit } from "./commands/init.js";
@@ -17,10 +18,14 @@ import { cmdDashboard } from "./commands/dashboard.js";
 import { cmdTestSelect } from "./commands/testselect.js";
 import { cmdVerify } from "./commands/verify.js";
 import { cmdDiff } from "./commands/diff.js";
+import { cmdDeps } from "./commands/deps.js";
 import { cmdArchCheck } from "./commands/archcheck.js";
 import { cmdWatch } from "./commands/watch.js";
 import { cmdUpdate } from "./commands/update.js";
 import { cmdDecide } from "./commands/decide.js";
+import { cmdReuse } from "./commands/reuse.js";
+import { cmdDead } from "./commands/dead.js";
+import { cmdSessionSave, cmdSessionLoad } from "./commands/session.js";
 import { registerAgentCommands } from "./commands/agents.js";
 import pkg from "../package.json" with { type: "json" };
 
@@ -59,6 +64,9 @@ program
 
 Helper & Setup Commands:
   $ scopecairn init                      index repo + setup agent integration
+  $ scopecairn reuse "<desc or sig>"     find existing similar functions/classes before creating new ones
+  $ scopecairn dead                      report unreferenced symbols and files with confidence levels
+  $ scopecairn session <save|load>       save or load working session state (.scopecairn/session.md)
   $ scopecairn read symbol indexFileSymbols symbol-level source excerpt
   $ scopecairn decide "pakai X karena Y"  catat keputusan arsitektur (tanpa argumen: daftar)
 
@@ -67,7 +75,7 @@ test-select, path, export, diff, arch-check, history) still work as hidden
 aliases mapped into the commands above. benchmark (dev-only) and update
 (deprecated, use npm) are also hidden from this list.
 
-Agent commands (context, impact, read, graph, status, verify) are
+Agent commands (context, reuse, dead, impact, read, graph, status, verify) are
 read-only toward source and only write to .scopecairn/ — safe to allowlist.
 `
   );
@@ -92,7 +100,9 @@ program
   .option("--clean", "remove local index directory (.scopecairn)")
   .option("--watch", "watch repository files and auto-refresh index in background")
   .option("--debounce <ms>", "debounce time in milliseconds for watch mode (default 300)", intArg)
-  .action((opts: { rebuild?: boolean; clean?: boolean; watch?: boolean; debounce?: number }) =>
+  .option("--changed-only", "hanya proses file yang berubah menurut git (+ file baru belum terindeks)")
+  .option("--lsp", "deteksi LSP opsional (tsserver/gopls/pyright) — best-effort, default off")
+  .action((opts: { rebuild?: boolean; clean?: boolean; watch?: boolean; debounce?: number; changedOnly?: boolean; lsp?: boolean }) =>
     cmdScan(repoRoot(), opts)
   );
 
@@ -108,12 +118,28 @@ program
   .option("--max-tokens <n>", "potong konteks agar estimasi muat N token (≈ char/4)", intArg)
   .option("--no-history", "lewati bagian Analogi riwayat")
   .option("--with-diff", "tambahkan ringkasan diff pada Analogi riwayat")
-  .option("--no-rules", "lewati bagian Project Rules (AGENTS.md)")
+  .option("--no-rules", "lewati bagian Project Rules (default)")
+  .option("--with-rules", "sertakan bagian Project Rules (AGENTS.md)")
+  .option("--with-guard", "sertakan bagian Task Guard & Definition of Done")
+  .option("--with-bodies", "paksa sertakan micro-excerpt kode untuk simbol HIGH teratas")
+  .option("--no-bodies", "lewati micro-excerpt kode otomatis")
   .option("--knowledge", "explain mode untuk knowledge agent: tanpa Scope/Guard coding")
   .option("--json", "output results as JSON")
-  .action((task: string, opts: { escalate?: boolean; noRefresh?: boolean; mode?: "NORMAL" | "FAST" | "SAFE" | "AUDIT"; maxTokens?: number; noHistory?: boolean; withDiff?: boolean; noRules?: boolean; knowledge?: boolean; json?: boolean }) =>
+  .option("--explain", "print score breakdown table per symbol (wSeed*seed, prox, cent, recency, cochange, verified)")
+  .option("--format <fmt>", "output format: brief|table|tree|mermaid (default markdown)")
+  .option(
+    "--anchor <paths>",
+    "file/folder titik awal pilihan agent, pisah koma atau ulangi (lihat `scopecairn map`)",
+    (v: string, prev: string[] = []) => [...prev, ...v.split(",").filter(Boolean)]
+  )
+  .action((task: string, opts: { escalate?: boolean; noRefresh?: boolean; mode?: "NORMAL" | "FAST" | "SAFE" | "AUDIT"; maxTokens?: number; noHistory?: boolean; withDiff?: boolean; noRules?: boolean; withRules?: boolean; withGuard?: boolean; withBodies?: boolean; bodies?: boolean; knowledge?: boolean; json?: boolean; explain?: boolean; format?: string; anchor?: string[] }) =>
     cmdContext(repoRoot(), task, opts)
   );
+
+program
+  .command("map [dir]")
+  .description("Compact code map (1 line/file) for agents to pick --anchor files")
+  .action((dir: string | undefined) => cmdMap(repoRoot(), dir));
 
 // ==========================================
 // 3. IMPACT (Blast Radius & Test Selection)
@@ -139,8 +165,9 @@ program
   .option("--to <target>", "show shortest call/dependency path to target symbol")
   .option("--export <fmt>", "export codebase graph (mermaid|graphml|dot|json)")
   .option("--out <path>", "output file for export")
+  .option("--budget <n>", "export budget: node cap (default 500)", intArg)
   .option("--json", "output results as JSON")
-  .action((symbol: string | undefined, opts: { json?: boolean; to?: string; export?: string; out?: string }) =>
+  .action((symbol: string | undefined, opts: { json?: boolean; to?: string; export?: string; out?: string; budget?: number }) =>
     cmdGraph(repoRoot(), symbol, opts)
   );
 
@@ -149,18 +176,45 @@ program
 // ==========================================
 program
   .command("verify")
-  .description("Pre-commit guard: check protected files, task scope, cycles (--diff, --arch)")
+  .description("Pre-commit guard: check protected files, task scope, cycles, and test gate (--diff, --arch, --test-gate)")
   .option("--diff", "structural symbol-level diff of working tree vs HEAD")
   .option("--arch", "check architectural layer rules and import boundaries")
   .option("--dod", "check Definition of Done items that can be verified mechanically")
+  .option("--test-gate", "run testing gate: weakened tests detection, changed-line coverage, and optional Stryker mutation")
+  .option("--coverage-threshold <n>", "minimum changed-line coverage percentage (default 80 from .scopecairn/config.yml)", intArg)
+  .option("--mutation", "enable Stryker mutation check on changed files (optional, slow)")
+  .option("--mutation-threshold <n>", "minimum Stryker mutation score percentage (default 60)", intArg)
+  .option("--run-coverage", "execute Vitest/Jest with --coverage before evaluating changed-line coverage")
+  .option("--run-mutation", "execute Stryker mutation runner directly on changed files")
+  .option("--pr-risk", "hitung PR risk agregat (protected/cycle/fan-in) vs --base (default origin/main) + SARIF sederhana")
+  .option("--sarif", "cetak SARIF sederhana (membutuh --pr-risk)")
   .option("--init", "generate initial .scopecairn/arch.json configuration template (with --arch)")
   .option("--task <task>", "task description to check scope creep against")
   .option("--base <ref>", "compare against a base ref (e.g. main, origin/main, HEAD~3) to include committed changes")
-  .option("--strict", "fail if any changes fall outside task scope")
+  .option("--strict", "fail if any changes fall outside task scope (default)", true)
+  .option("--no-strict", "allow changes outside task scope (warning only)")
   .option("--json", "output results as JSON")
   .option("--no-refresh", "skip index auto-refresh")
-  .action((opts: { task?: string; strict?: boolean; json?: boolean; noRefresh?: boolean; diff?: boolean; arch?: boolean; init?: boolean; dod?: boolean; base?: string }) =>
-    cmdVerify(repoRoot(), opts)
+  .action(
+    (opts: {
+      task?: string;
+      strict?: boolean;
+      json?: boolean;
+      noRefresh?: boolean;
+      diff?: boolean;
+      arch?: boolean;
+      init?: boolean;
+      dod?: boolean;
+      base?: string;
+      testGate?: boolean;
+      coverageThreshold?: number;
+      mutation?: boolean;
+      mutationThreshold?: number;
+      runCoverage?: boolean;
+      runMutation?: boolean;
+      prRisk?: boolean;
+      sarif?: boolean;
+    }) => cmdVerify(repoRoot(), opts)
   );
 
 // ==========================================
@@ -184,24 +238,101 @@ program
 program
   .command("init [path]")
   .description("Initial indexing + Skill, Workflow, agent skills (never touches AGENTS.md)")
-  .option("--agents <list>", "agent targets: comma list from claude,cursor,windsurf,copilot,kiro,opencode, or 'all'")
-  .action((targetPath: string | undefined, opts: { agents?: string }) =>
+  .option("--agents <list>", "agent targets: comma list from claude,cursor,windsurf,copilot,kiro,opencode,qoder, or 'all'")
+  .option("--hooks", "install git pre-commit verification guard (.git/hooks/pre-commit)")
+  .option("--ci", "write .github/workflows/scopecairn.yml (verify --test-gate --base origin/main)")
+  .action((targetPath: string | undefined, opts: { agents?: string; hooks?: boolean; ci?: boolean }) =>
     cmdInit(resolveRoot(targetPath), opts)
   );
 
 program
   .command("read")
   .argument("<kind>", "what to read (symbol)")
-  .argument("<name>", "symbol name")
-  .description("Read a symbol's source excerpt (not the whole file)")
+  .argument("<names...>", "symbol name(s)")
+  .description("Read a symbol's source excerpt (not the whole file; multiple names supported)")
   .option("--json", "output results as JSON")
-  .action((kind: string, name: string, opts: { json?: boolean }) => cmdRead(repoRoot(), kind, name, opts));
+  .option("--full", "return whole file instead of excerpt")
+  .option("--with-callers", "list incoming callers for each symbol")
+  .action((kind: string, names: string[], opts: { json?: boolean; full?: boolean; withCallers?: boolean }) => cmdRead(repoRoot(), kind, names, opts));
 
 program
   .command("decide [text]")
   .description("Catat keputusan arsitektur ke .scopecairn/decisions.md (tanpa argumen: tampilkan daftar)")
   .option("--json", "output results as JSON")
   .action((text: string | undefined, opts: { json?: boolean }) => cmdDecide(repoRoot(), text, opts));
+
+program
+  .command("reuse <query>")
+  .description("Find existing similar functions or classes from the graph before creating new ones")
+  .option("--limit <n>", "maximum number of candidates to return (default 10)", intArg)
+  .option("--no-refresh", "skip incremental refresh")
+  .option("--json", "output results as JSON")
+  .action((query: string, opts: { limit?: number; noRefresh?: boolean; refresh?: boolean; json?: boolean }) =>
+    cmdReuse(repoRoot(), query, opts)
+  );
+
+program
+  .command("dead")
+  .description("Report symbols and files with no incoming edges (excluding entrypoints, tests, routes, Protected)")
+  .option("--no-refresh", "skip incremental refresh")
+  .option("--json", "output results as JSON")
+  .action((opts: { noRefresh?: boolean; refresh?: boolean; json?: boolean }) =>
+    cmdDead(repoRoot(), opts)
+  );
+
+program
+  .command("deps")
+  .description("List manifest dependencies and flag unused candidates (package.json, pyproject.toml, go.mod, Cargo.toml)")
+  .option("--no-refresh", "skip incremental refresh")
+  .option("--json", "output results as JSON")
+  .action((opts: { noRefresh?: boolean; refresh?: boolean; json?: boolean }) =>
+    cmdDeps(repoRoot(), opts)
+  );
+
+const sessionCmd = program
+  .command("session")
+  .description("Save or load working session state (.scopecairn/session.md, max 4,000 chars)");
+
+sessionCmd
+  .command("save [content]")
+  .description("Atomically save session state (.scopecairn/session.md, rejects >4,000 chars or secrets)")
+  .option("-w, --working <text>", "sedang dikerjakan (what is currently being worked on)")
+  .option("-d, --decisions <text>", "keputusan (decisions made during session)")
+  .option("-n, --next <text>", "langkah berikutnya (next steps)")
+  .option("-b, --blockers <text>", "blocker (current blockers)")
+  .option(
+    "-f, --files <paths>",
+    "file penting (important files, comma-separated or repeated)",
+    (v: string, prev: string[] = []) => [
+      ...prev,
+      ...v
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean),
+    ]
+  )
+  .option("--file <path>", "read session markdown from file")
+  .option("--json", "output results as JSON")
+  .action(
+    (
+      content: string | undefined,
+      opts: {
+        working?: string;
+        decisions?: string;
+        next?: string;
+        blockers?: string;
+        files?: string[];
+        file?: string;
+        json?: boolean;
+      }
+    ) => cmdSessionSave(repoRoot(), { ...opts, content })
+  );
+
+sessionCmd
+  .command("load")
+  .description("Load saved session and report commits/files changed since last save")
+  .option("--json", "output results as JSON")
+  .action((opts: { json?: boolean }) => cmdSessionLoad(repoRoot(), opts));
 
 program
   .command("benchmark", { hidden: true })
@@ -267,7 +398,8 @@ program
   .description("[Alias: `scopecairn graph --export <fmt>`] Export codebase graph")
   .option("--format <fmt>", "export format", "mermaid")
   .option("--out <path>", "output file (default .scopecairn/graph.<ext>)")
-  .action((opts: { format: string; out?: string }) => cmdExport(repoRoot(), opts.format, opts.out));
+  .option("--budget <n>", "export budget: node cap (default 500)", intArg)
+  .action((opts: { format: string; out?: string; budget?: number }) => cmdExport(repoRoot(), opts.format, opts.out, opts.budget));
 
 program
   .command("diff", { hidden: true })

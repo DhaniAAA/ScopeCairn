@@ -11,6 +11,7 @@ import {
   antigravityKnowledgeSkillPath,
   antigravityWorkflowPath,
 } from "../integrate/install.js";
+import { findAgentsMd } from "../scope/agentsmd.js";
 import { logError } from "../log.js";
 
 function tick(ok: boolean): string {
@@ -53,6 +54,39 @@ export async function cmdDoctor(repoRoot: string, opts?: { verbose?: boolean }):
     if (opts?.verbose) console.error(err);
   }
   console.log(`${tick(dbOk)} Database ${dbPath(repoRoot)}${graphDetail}`);
+
+  // Insight: scan delta + cache status (minimal, non-fatal; tak mengubah exit code).
+  try {
+    const db = openDb(repoRoot);
+    try {
+      const deltaRow = db.prepare(`SELECT value FROM meta WHERE key = 'last_scan_delta'`).get() as { value: string } | undefined;
+      if (deltaRow) {
+        try {
+          const d = JSON.parse(deltaRow.value) as Record<string, number>;
+          console.log(
+            `i Scan delta: +${d.inserted ?? 0} new, ~${d.updated ?? 0} updated, =${d.unchanged ?? 0} unchanged, -${d.removed ?? 0} removed (${(Number(d.durationMs ?? 0) / 1000).toFixed(2)}s)`
+          );
+        } catch {
+          console.log(`i Scan delta: (unparseable)`);
+        }
+      } else {
+        console.log(`i Scan delta: n/a (run \`scopecairn scan\` to record)`);
+      }
+      let faninN = -1;
+      let metricsN = -1;
+      let cyclesN = -1;
+      try { faninN = (db.prepare(`SELECT COUNT(*) AS n FROM fanin`).get() as { n: number }).n; } catch { faninN = -1; }
+      try { metricsN = (db.prepare(`SELECT COUNT(*) AS n FROM node_metrics`).get() as { n: number }).n; } catch { metricsN = -1; }
+      try { cyclesN = (db.prepare(`SELECT COUNT(*) AS n FROM cycles`).get() as { n: number }).n; } catch { cyclesN = -1; }
+      const fmtCache = (n: number): string => (n < 0 ? "n/a" : n > 0 ? `hit (${n} rows)` : "cold (0 rows)");
+      console.log(`i Cache: fanin ${fmtCache(faninN)}, node_metrics ${fmtCache(metricsN)}, cycles ${fmtCache(cyclesN)}`);
+    } finally {
+      db.close();
+    }
+  } catch (err) {
+    logError("doctor", err, repoRoot);
+    if (opts?.verbose) console.error(err);
+  }
 
   // Graphify Engine: circular dependencies + critical single points of failure.
   try {
@@ -234,6 +268,18 @@ export async function cmdDoctor(repoRoot: string, opts?: { verbose?: boolean }):
 
   const wfPath = antigravityWorkflowPath(repoRoot);
   console.log(`${tick(fs.existsSync(wfPath))} Workflow (${path.relative(repoRoot, wfPath)}, opsional)`);
+
+  const agentsRel = findAgentsMd(repoRoot);
+  if (agentsRel) {
+    const aAbs = path.join(repoRoot, agentsRel);
+    try {
+      const aText = fs.readFileSync(aAbs, "utf8");
+      const hasBlock = aText.includes(MARKER);
+      console.log(`${tick(hasBlock)} AGENTS.md (${agentsRel}, ${hasBlock ? "managed block active" : "no ScopeCairn rules"})`);
+    } catch {
+      // ignore
+    }
+  }
 
   // §8.6: pengingat yang tak bisa dicek otomatis.
   console.log(`i Strict Mode mengabaikan allowlist — semua perintah tetap perlu persetujuan.`);

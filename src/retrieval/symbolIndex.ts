@@ -42,26 +42,85 @@ export interface SeedHit {
 export function seedSearch(
   db: DatabaseSync,
   tokens: string[],
-  // 50: query bervarian (stemming+glossary) punya lebih banyak term OR,
+  // 100: query bervarian (stemming+glossary) punya lebih banyak term OR,
   // kandidat perlu lebih longgar sebelum RANK memangkas ke topN.
-  limit = 50
+  limit = 100
 ): SeedHit[] {
   if (tokens.length === 0) return [];
-  const q = tokens
-    .map((t) => `"${t.replace(/"/g, "")}"`)
-    .join(" OR ");
-  let rows: { symbol_id: number; rank: number }[];
-  try {
-    const lim = Math.max(1, Math.min(500, Math.floor(limit) || 30));
-    rows = db
-      .prepare(
-        `SELECT symbol_id, bm25(symbol_index) AS rank
-         FROM symbol_index WHERE symbol_index MATCH ?
-         ORDER BY rank LIMIT ${lim}`
-      )
-      .all(q) as { symbol_id: number; rank: number }[];
-  } catch {
-    return [];
+  // Prefix query FTS5 (`term*`): naikkan recall untuk varian morfologi yang
+  // belum tercakup stem (mis. token terpotong / akhiran beda sedikit).
+  const prefixQ = (ts: string[]): string =>
+    ts
+      .map((t) => t.replace(/[^a-zA-Z0-9]/g, ""))
+      .filter((t) => t.length >= 2)
+      .map((t) => `${t}*`)
+      .join(" OR ");
+  const q = prefixQ(tokens);
+  if (!q) return [];
+  let rows: { symbol_id: number; rank: number }[] = [];
+  const runFts = (query: string): { symbol_id: number; rank: number }[] => {
+    try {
+      const lim = Math.max(1, Math.min(500, Math.floor(limit) || 30));
+      return db
+        .prepare(
+          `SELECT symbol_id, bm25(symbol_index) AS rank
+           FROM symbol_index WHERE symbol_index MATCH ?
+           ORDER BY rank LIMIT ${lim}`
+        )
+        .all(query) as { symbol_id: number; rank: number }[];
+    } catch {
+      return [];
+    }
+  };
+  rows = runFts(q);
+  if (rows.length === 0) {
+    // Fallback typo-tolerant: variasi edit-distance 1 (hapus 1 char +
+    // transposisi adjacent) untuk token panjang, lalu substring scan.
+    const variants = new Set<string>();
+    for (const t of tokens) {
+      const p = t.replace(/[^a-zA-Z0-9]/g, "");
+      if (p.length < 4) continue;
+      for (let i = 0; i < p.length; i++) variants.add(p.slice(0, i) + p.slice(i + 1));
+      for (let i = 0; i + 1 < p.length; i++) {
+        const c = p.split("");
+        const tmp = c[i];
+        c[i] = c[i + 1];
+        c[i + 1] = tmp;
+        variants.add(c.join(""));
+      }
+    }
+    if (variants.size > 0) {
+      const vq = prefixQ([...variants]);
+      if (vq) rows = runFts(vq);
+    }
+    if (rows.length === 0) {
+      // Substring fallback: scan kolom tokens langsung (hanya saat 0 hit,
+      // batasi 5000 baris) — cocokkan token sebagai substring.
+      try {
+        const trows = db
+          .prepare(`SELECT symbol_id, tokens FROM symbol_index LIMIT 5000`)
+          .all() as { symbol_id: number; tokens: string }[];
+        const need = tokens
+          .map((t) => t.replace(/[^a-zA-Z0-9]/g, "").toLowerCase())
+          .filter((t) => t.length >= 3);
+        if (need.length > 0) {
+          const scored: { symbol_id: number; rank: number }[] = [];
+          const seen = new Set<number>();
+          for (const r of trows) {
+            if (seen.has(r.symbol_id)) continue;
+            const toks = r.tokens.toLowerCase();
+            if (need.some((n) => toks.includes(n))) {
+              scored.push({ symbol_id: r.symbol_id, rank: -1 });
+              seen.add(r.symbol_id);
+            }
+            if (scored.length >= 100) break;
+          }
+          rows = scored;
+        }
+      } catch {
+        // abaikan
+      }
+    }
   }
   if (rows.length === 0) return [];
   // Presisi: hitung token-task berbeda yang cocok per simbol. Seed yang

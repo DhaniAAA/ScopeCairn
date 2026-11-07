@@ -1,6 +1,7 @@
 node_modules/
 dist/
 .scopecairn/
+.scopecairn/session.md
 *.log
 .DS_Store
 .kiro/

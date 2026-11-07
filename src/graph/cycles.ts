@@ -98,6 +98,7 @@ function hashIds(ids: number[]): string {
  */
 export function refreshCycles(db: DatabaseSync): Cycle[] {
   const { adj } = readAdj(db);  const comps = stronglyConnected(db);
+  // (fingerprint disimpan di akhir — lihat ensureCycles)
   const cycles: number[][] = [];
   for (const c of comps) {
     if (c.length > 1) {
@@ -125,7 +126,45 @@ export function refreshCycles(db: DatabaseSync): Cycle[] {
     const row = db.prepare(`SELECT id FROM cycles WHERE cycle_hash = ?`).get(h) as { id: number };
     out.push({ id: row.id, hash: h, length: sorted.length, nodeIds: sorted });
   }
+  try {
+    const fp = cyclesFingerprint(db);
+    db.prepare(`INSERT INTO meta(key, value) VALUES ('cycles_fp', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run(fp);
+  } catch {
+    // best-effort: fingerprint opsional
+  }
   return out;
+}
+
+function cyclesFingerprint(db: DatabaseSync): string {
+  try {
+    const syms = (db.prepare(`SELECT COUNT(*) AS n FROM symbols`).get() as { n: number }).n;
+    const rels = (db.prepare(`SELECT COUNT(*) AS n FROM relationships`).get() as { n: number }).n;
+    let maxRel = 0;
+    try {
+      maxRel = (db.prepare(`SELECT COALESCE(MAX(id),0) AS n FROM relationships`).get() as { n: number }).n;
+    } catch {
+      maxRel = 0;
+    }
+    return `${syms}:${rels}:${maxRel}`;
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Pakai cache `cycles` bila fingerprint graf tak berubah; bila usang
+ * (atau belum pernah dihitung) hitung ulang. Menghindari full Tarjan SCC
+ * di setiap scan/verify bila tak ada perubahan graf.
+ */
+export function ensureCycles(db: DatabaseSync): Cycle[] {
+  try {
+    const cur = cyclesFingerprint(db);
+    const row = db.prepare(`SELECT value FROM meta WHERE key = 'cycles_fp'`).get() as { value: string } | undefined;
+    if (row && cur !== "" && row.value === cur) return getCycles(db, 100);
+  } catch {
+    // fall through ke refresh
+  }
+  return refreshCycles(db);
 }
 
 export function getCycles(db: DatabaseSync, limit = 20): Cycle[] {

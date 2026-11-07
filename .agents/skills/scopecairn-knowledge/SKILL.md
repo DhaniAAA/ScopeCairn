@@ -7,58 +7,66 @@ description: ScopeCairn cold-start map + context extraction for knowledge tasks 
 
 # ScopeCairn — Knowledge Mode (ReAct)
 
-Reasoning loop: Thought → Action → Observe, max 3 iterasi. Semua Action
-read-only terhadap source; ScopeCairn hanya menulis ke `.scopecairn/`.
+Reasoning loop: Thought → Action → Observe, max 3 iterations. All Actions are
+read-only to the source code; ScopeCairn only writes to `.scopecairn/`.
 
-Iteration 0 — Cold start (lewati yang tidak ada):
-Thought: apa yang sudah diketahui repo ini tanpa query apa pun?
-Action: baca berurutan:
-- `.scopecairn/GRAPH.md` — peta graph berbudget: modul, simbol paling dipakai,
-  hotspot PageRank, siklus, rute, model, protected.
-- `.scopecairn/ARCHAEOLOGY.md` — kepemilikan/bus factor/churn dari git log lokal
-  (snapshot sekali tulis; hapus file untuk regenerasi).
-- `.scopecairn/decisions.md` — keputusan arsitektur yang tercatat (dicatat
-  user/agent lewat `scopecairn decide`), bila ada.
-Observe freshness: GRAPH.md memuat baris
-`> Freshness: scanned <ISO> · HEAD <sha>` (bila tidak ada — mis. index lama —
-lewati cek ini). Bila ada, bandingkan <sha> dengan `git rev-parse --short HEAD`;
-bila berbeda, sebut peta mungkin usang dan percayai command live untuk yang
-berubah. Cold start = orientasi, bukan jawaban.
+Iteration 0 — Cold start (skip any missing artifacts):
+Thought: what is already known about this repo without running any queries?
+Action: read in order:
+- `.scopecairn/GRAPH.md` — budgeted graph map: modules, most-used symbols,
+  PageRank hotspots, cycles, routes, models, protected files.
+- `.scopecairn/ARCHAEOLOGY.md` — ownership / bus factor / churn from local git log
+  (write-once snapshot; delete the file to regenerate).
+- `.scopecairn/decisions.md` — recorded architectural decisions (logged by
+  user/agent via `scopecairn decide`), if any.
+Observe freshness: GRAPH.md contains the line
+`> Freshness: scanned <ISO> · HEAD <sha>` (if missing — e.g. legacy index —
+skip this check). If present, compare <sha> with `git rev-parse --short HEAD`;
+if different, note that the map may be outdated and rely on live commands for
+modified areas. Cold start = orientation, not the answer.
 
 Iteration 1 — Scope:
-Thought: apa yang sebenarnya ditanyakan?
-Action: `scopecairn context --knowledge "<pertanyaan user>" --json`
-Observe: cek `high`, `medium`, `symbols[0].score`, `analogs`, `empty`.
-- `high` DAN `medium` kosong / semua score <0.15 → reformulasi sekali (alias
-  domain dari `.scopecairn/glossary.yml`, pecah jadi 2 sub-pertanyaan), lalu
-  lanjut dari cold start — jangan berhenti.
-- `high` kosong tapi `medium` berisi → normal untuk task SIMPLE; lanjut.
-- `analogs` = commit yang menyentuh area sama: bukti "kenapa". Kutip
+Thought: what is actually being asked?
+Action: `scopecairn context --knowledge "<user question>" --json`
+Observe: check `high`, `medium`, `symbols[0].score`, `analogs`, `empty`.
+- Both `high` AND `medium` empty / all scores <0.15 → reformulate once (domain
+  aliases from `.scopecairn/glossary.yml`, split into 2 sub-questions), then
+  continue from cold start — do not halt.
+- `high` empty but `medium` has entries → normal for SIMPLE tasks; proceed.
+- `analogs` = commits touching the same area: evidence of "why". Quote
   `shortSha + subject`.
-- Keputusan arsitektur: pada output markdown sudah terlampir di akhir
-  (`## Keputusan Arsitektur`); pada `--json` baca `.scopecairn/decisions.md`
-  langsung (envelope JSON tidak memuatnya).
+- Architectural decisions: attached at the end of markdown output
+  (`## Architectural Decisions`); for `--json`, read `.scopecairn/decisions.md`
+  directly (the JSON envelope omits it).
 
 Iteration 2 — Expand:
-Thought: simbol mana yang perlu trace relasi?
-Action (pilih seperlunya, selalu `--json`):
-- Relasi modul: `scopecairn graph <symbol> --json`
-- Dampak: `scopecairn impact <path> --json`
-- Alur A→B: `scopecairn graph <from> --to <to> --json`
-Observe: sambungkan hop via `edges[].rel` (`graph`) atau `hops[].rel`
-(`graph --to`) — rel CALLS/IMPORTS/QUERIES.
-Stop bila rantai sudah menjawab "kenapa / bagaimana".
+Thought: which symbols need relationship tracing?
+Action (choose as needed, always `--json`):
+- Module relations: `scopecairn graph <symbol> --json` (add `--budget <n>` for large monorepos)
+- Blast radius / impact: `scopecairn impact <path> --json`
+- Flow A→B: `scopecairn graph <from> --to <to> --json`
+- Dependencies: `scopecairn deps --json` (offline manifest health)
+Observe: connect hops via `edges[].rel` (`graph`) or `hops[].rel`
+(`graph --to`) — relationships CALLS/IMPORTS/QUERIES/ROUTES_TO. Ranking is
+5-signal + PageRank/PPR (`wSeed/wProximity/wCentrality/wRecency/wCochange`
+plus optional PPR/PR); use `context --explain --format brief` to inspect.
+Coverage: languages TS/JS/Python/Java/Go/Rust/PHP/C#/C/C++/Ruby/HTML/Vue/
+Kotlin/Dart/Shell/SQL/GraphQL/Proto; frameworks Prisma/Drizzle/SQLAlchemy/
+Next.js/Express/FastAPI/NestJS/Django/Vue/Fastify/Koa/Hono/Rails/Laravel/
+Spring/Go.
+Stop when the chain answers "why / how".
 
 Iteration 3 — Ground:
-Thought: apa bukti historis / source-nya?
+Thought: what is the historical / source evidence?
 Action:
-- `scopecairn history "<pertanyaan>" --json` untuk keputusan + co-change
-  (`empty: true` = tidak ada analog — jangan dipaksa).
-- `scopecairn read symbol <nama> --json` untuk excerpt (bukan baca file penuh).
-Observe: kutip `shortSha + subject` dan `file:range` sebagai bukti.
+- `scopecairn history "<question>" --json` for decisions + co-changes
+  (`empty: true` = no analogs — do not force).
+- `scopecairn read symbol <name> --json` for excerpts (do not read full files).
+Observe: quote `shortSha + subject` and `file:range` as evidence.
 
-Stop rules: berhenti saat jawaban cukup, atau 3 iterasi, atau `high` stabil
-antar iterasi. Bentuk jawaban: jawaban dulu, lalu bukti (`file:line`,
-`shortSha + subject`), lalu pertanyaan terbuka. Setiap klaim butuh bukti dari
-command di atas — artefak cold start adalah orientasi, bukan bukti per-task.
-Jangan menulis atau mengubah file — hanya baca, rangkum, dan jelaskan.
+Stop rules: stop when the answer is complete, or 3 iterations reached, or `high`
+is stable across iterations. Answer structure: direct answer first, followed by
+evidence (`file:line`, `shortSha + subject`), then open questions. Every claim
+requires evidence from the commands above — cold start artifacts provide
+orientation, not per-task proof. Never write or modify files — only read,
+summarize, and explain.

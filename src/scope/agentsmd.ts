@@ -58,11 +58,28 @@ export function loadProjectRules(
     return null;
   }
   text = text.replace(/\r\n/g, "\n").trim();
+  text = stripManagedBlock(text);
   if (!text) return null;
-  if (fileExceedsCap || text.length > cap) {
+  const isTruncated = (fileExceedsCap && text.length >= cap) || text.length > cap;
+  if (isTruncated) {
     return { path: rel, content: text.slice(0, cap).trimEnd(), truncated: true };
   }
   return { path: rel, content: text, truncated: false };
+}
+
+/**
+ * Buang blok aturan ScopeCairn (<!-- scopecairn:managed --> ...) dari teks AGENTS.md
+ * agar seksi Project Rules di context hanya memuat aturan asli milik pengguna.
+ */
+export function stripManagedBlock(content: string): string {
+  const marker = "<!-- scopecairn:managed -->";
+  if (!content.includes(marker)) return content;
+  const anchored = /\n*<!--\s*scopecairn:managed\s*-->[\s\S]*?(?:pertanyaan non-coding|context berikutnya|future contexts)\.[ \t]*(\n|$)/;
+  if (anchored.test(content)) {
+    return content.replace(anchored, "\n").trim();
+  }
+  const idx = content.indexOf(marker);
+  return content.slice(0, idx).trim();
 }
 
 /**

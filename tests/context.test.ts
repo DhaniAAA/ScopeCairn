@@ -2,6 +2,9 @@
 // output --knowledge untuk task SIMPLE (F1/F2 + perbaikan knowledge agent).
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
   buildContext,
@@ -9,6 +12,7 @@ import {
   resolveEffectiveMode,
 } from "../src/retrieval/contextBuilder.js";
 import { PRUNE_SECTIONS } from "../src/commands/context.js";
+import { installPreCommitHook, uninstallPreCommitHook } from "../src/commands/init.js";
 import { DEFAULT_CONFIG } from "../src/retrieval/config.js";
 
 function memDb(): DatabaseSync {
@@ -201,8 +205,12 @@ test("setiap seksi PRUNE_SECTIONS benar-benar dirender (drift heading = prune bi
       projectRules: { path: "AGENTS.md", content: "- aturan", truncated: false },
       history: { analogs },
     };
-    const know = buildContext(db, "t", RESULT, COMPLEX_CLS, { ...opts, knowledge: true });
-    const full = buildContext(db, "t", RESULT, COMPLEX_CLS, opts);
+    const resWithVerified = {
+      ...RESULT,
+      verifiedAnalogs: [{ description: "x", files: ["src/a.ts"], verifiedAt: "2026-10-01", score: 1.0 }],
+    };
+    const know = buildContext(db, "t", resWithVerified, COMPLEX_CLS, { ...opts, knowledge: true });
+    const full = buildContext(db, "t", resWithVerified, COMPLEX_CLS, opts);
     for (const sec of PRUNE_SECTIONS) {
       assert.ok(
         know.markdown.includes(`## ${sec}`) || full.markdown.includes(`## ${sec}`),
@@ -246,5 +254,115 @@ test("hotspots tahan tanpa tabel node_metrics dan terisi bila ada", () => {
     ]);
   } finally {
     db.close();
+  }
+});
+
+test("context COMPLEX menyertakan line-range + signature simbol dan menyembunyikan Task Guard secara default", () => {
+  const db = memDb();
+  try {
+    const richResult = {
+      ...RESULT,
+      ranked: [
+        {
+          ...sym(1, "buildContext", "src/a.ts", 0.75),
+          startLine: 46,
+          endLine: 402,
+          signature: "export function buildContext(db: DatabaseSync, task: string): BuiltContext",
+        },
+      ],
+    };
+    const compact = buildContext(db, "t", richResult, COMPLEX_CLS, { repoRoot: "." });
+    assert.ok(compact.markdown.includes("`src/a.ts:46-402`"));
+    assert.ok(compact.markdown.includes("`export function buildContext(db: DatabaseSync, task: string): BuiltContext`"));
+    assert.ok(!compact.markdown.includes("## Task Guard"));
+    assert.ok(!compact.markdown.includes("## Definition of Done"));
+
+    const withGuard = buildContext(db, "t", richResult, COMPLEX_CLS, { repoRoot: ".", withGuard: true });
+    assert.ok(withGuard.markdown.includes("## Task Guard"));
+    assert.ok(withGuard.markdown.includes("## Definition of Done"));
+  } finally {
+    db.close();
+  }
+});
+
+test("context COMPLEX menyertakan inline callers (called-by) dan micro-excerpt otomatis untuk simbol HIGH", () => {
+  const db = memDb();
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "sc-ctx-excerpt-"));
+  try {
+    fs.mkdirSync(path.join(tmp, "src"), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmp, "src", "calc.ts"),
+      [
+        "export function computeTax(amount: number): number {",
+        "  const rate = 0.11;",
+        "  return Math.round(amount * rate);",
+        "}",
+      ].join("\n")
+    );
+    db.exec(`
+      INSERT INTO files (id, path, language, hash, size) VALUES
+        (1, 'src/calc.ts', 'typescript', 'h1', 100),
+        (2, 'src/checkout.ts', 'typescript', 'h2', 100);
+      INSERT INTO symbols (id, file_id, name, type, signature, start_line, end_line) VALUES
+        (1, 1, 'computeTax', 'function', 'export function computeTax(amount: number): number', 1, 4),
+        (2, 2, 'runCheckout', 'function', 'export function runCheckout()', 12, 25);
+      INSERT INTO relationships (source_id, target_id, relationship_type, weight, confidence, evidence) VALUES
+        (2, 1, 'CALLS', 1.0, 1.0, 'EXTRACTED');
+    `);
+    const res = {
+      ...RESULT,
+      ranked: [
+        {
+          ...sym(1, "computeTax", "src/calc.ts", 0.85),
+          startLine: 1,
+          endLine: 4,
+          signature: "export function computeTax(amount: number): number",
+        },
+      ],
+    };
+    const built = buildContext(db, "computeTax", res, COMPLEX_CLS, { repoRoot: tmp });
+    assert.ok(built.markdown.includes("↳ called-by: runCheckout (`src/checkout.ts:12`)"));
+    assert.ok(built.markdown.includes("## Key Excerpts"));
+    assert.ok(built.markdown.includes("const rate = 0.11;"));
+
+    const noBodies = buildContext(db, "computeTax", res, COMPLEX_CLS, { repoRoot: tmp, withBodies: false });
+    assert.ok(!noBodies.markdown.includes("## Key Excerpts"));
+  } finally {
+    db.close();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("installPreCommitHook dan uninstallPreCommitHook mengelola .git/hooks/pre-commit dengan aman", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "sc-hook-"));
+  try {
+    // Tanpa .git → lewati dengan aman
+    assert.ok(installPreCommitHook(tmp, "scopecairn").includes("skipped"));
+
+    // Buat .git dan pasang hook baru
+    fs.mkdirSync(path.join(tmp, ".git"), { recursive: true });
+    const msg = installPreCommitHook(tmp, "scopecairn");
+    assert.ok(msg.includes("installed"));
+    const hookPath = path.join(tmp, ".git", "hooks", "pre-commit");
+    assert.ok(fs.existsSync(hookPath));
+    assert.ok(fs.readFileSync(hookPath, "utf8").includes("scopecairn verify --no-strict"));
+
+    // Uninstall menghapus file bila hanya berisi hook ScopeCairn
+    assert.equal(uninstallPreCommitHook(tmp), "Pre-commit hook removed");
+    assert.ok(!fs.existsSync(hookPath));
+
+    // Bila user sudah punya pre-commit sendiri, pertahankan isinya saat install & uninstall
+    fs.writeFileSync(hookPath, "#!/bin/sh\necho 'user check'\n");
+    installPreCommitHook(tmp, "npx scopecairn");
+    const merged = fs.readFileSync(hookPath, "utf8");
+    assert.ok(merged.includes("echo 'user check'"));
+    assert.ok(merged.includes("npx scopecairn verify --no-strict"));
+
+    assert.equal(uninstallPreCommitHook(tmp), "Pre-commit hook cleaned");
+    const cleaned = fs.readFileSync(hookPath, "utf8");
+    assert.ok(cleaned.includes("echo 'user check'"));
+    assert.ok(!cleaned.includes("scopecairn verify"));
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
   }
 });

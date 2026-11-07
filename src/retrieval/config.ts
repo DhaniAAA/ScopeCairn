@@ -10,20 +10,31 @@ export interface RetrievalConfig {
   wCentrality: number;
   wRecency: number;
   wCochange: number;
+  /** Bobot PPR/PageRank Fase 2 (default 0 = tidak memengaruhi skor lama). */
+  wPpr: number;
+  wPr: number;
   maxDepth: number;
   topN: number;
   decayPerHop: number;
+  coverageThreshold: number;
+  mutationEnabled: boolean;
+  mutationThreshold: number;
 }
 
 export const DEFAULT_CONFIG: RetrievalConfig = {
-  wSeed: 0.3,
-  wProximity: 0.35,
-  wCentrality: 0.15,
+  wSeed: 0.5,
+  wProximity: 0.25,
+  wCentrality: 0.1,
   wRecency: 0.1,
   wCochange: 0.1,
+  wPpr: 0,
+  wPr: 0,
   maxDepth: 2,
   topN: 20,
   decayPerHop: 0.7,
+  coverageThreshold: 80,
+  mutationEnabled: false,
+  mutationThreshold: 60,
 };
 
 function parseSimpleYml(text: string): Record<string, string> {
@@ -53,9 +64,23 @@ export function loadConfig(repoRoot: string): RetrievalConfig {
     cfg.wCentrality = num("w_centrality", cfg.wCentrality);
     cfg.wRecency = num("w_recency", cfg.wRecency);
     cfg.wCochange = num("w_cochange", cfg.wCochange);
+    cfg.wPpr = num("w_ppr", cfg.wPpr);
+    cfg.wPr = num("w_pr", cfg.wPr);
     cfg.maxDepth = Math.max(1, Math.min(4, Math.round(num("max_depth", cfg.maxDepth))));
     cfg.topN = Math.max(5, Math.min(100, Math.round(num("top_n", cfg.topN))));
     cfg.decayPerHop = Math.max(0, Math.min(1, num("decay_per_hop", cfg.decayPerHop)));
+    cfg.coverageThreshold = Math.max(
+      0,
+      Math.min(100, num("coverage_threshold", cfg.coverageThreshold))
+    );
+    if (kv["mutation_enabled"] !== undefined) {
+      const rawMut = kv["mutation_enabled"].toLowerCase();
+      cfg.mutationEnabled = rawMut === "true" || rawMut === "1" || rawMut === "yes";
+    }
+    cfg.mutationThreshold = Math.max(
+      0,
+      Math.min(100, num("mutation_threshold", cfg.mutationThreshold))
+    );
   } catch {
     // corrupt config → defaults
   }
@@ -111,8 +136,9 @@ export function ensureDefaultFiles(repoRoot: string): void {
     fs.writeFileSync(
       cfgPath,
       `# ScopeCairn retrieval config (bobot FR-05, dikalibrasi Fase 6)\n` +
-        `w_seed: 0.3\nw_proximity: 0.35\nw_centrality: 0.15\nw_recency: 0.1\nw_cochange: 0.1\n` +
-        `max_depth: 2\ntop_n: 20\ndecay_per_hop: 0.7\n`
+        `w_seed: 0.5\nw_proximity: 0.25\nw_centrality: 0.1\nw_recency: 0.1\nw_cochange: 0.1\n` +
+        `max_depth: 2\ntop_n: 20\ndecay_per_hop: 0.7\n` +
+        `coverage_threshold: 80\nmutation_enabled: false\nmutation_threshold: 60\n`
     );
   }
   const gloPath = path.join(dir, "glossary.yml");
@@ -130,4 +156,8 @@ export function ensureDefaultFiles(repoRoot: string): void {
     );
   }
   ensureProtectedFile(repoRoot);
+  const scIgnorePath = path.join(dir, ".gitignore");
+  if (!fs.existsSync(scIgnorePath)) {
+    fs.writeFileSync(scIgnorePath, "session.md\nscopecairn.db*\n", "utf8");
+  }
 }

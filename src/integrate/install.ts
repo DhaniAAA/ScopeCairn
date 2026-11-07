@@ -10,6 +10,7 @@ import {
 } from "./templates.js";
 import { AGENT_MATRIX, findTarget, type AgentTarget } from "./matrix.js";
 import { detectAgentDir, detectPrefix, extractPrefixUsed } from "./detect.js";
+import { findAgentsMd } from "../scope/agentsmd.js";
 
 // Installer per-agent: `scopecairn <agent> install|uninstall`.
 // init --agents menumpang fungsi yang sama agar satu sumber kebenaran.
@@ -115,7 +116,7 @@ export function removeManagedBlock(
     }
   }
   const anchored = new RegExp(
-    `\\n*${MARKER}\\n# ScopeCairn[\\s\\S]*?(?:pertanyaan non-coding|context berikutnya)\\.[ \\t]*(\\n|$)`,
+    `\\n*${MARKER}\\n# ScopeCairn[\\s\\S]*?(?:pertanyaan non-coding|context berikutnya|future contexts)\\.[ \\t]*(\\n|$)`,
     "",
   );
   if (anchored.test(content)) {
@@ -123,7 +124,7 @@ export function removeManagedBlock(
   }
   // Yatim versi lama (marker hilang, badan tersisa): jangkar pada judul +
   // baris terakhir template yang khas. Hapus SEMUA kemunculan.
-  const orphan = /# ScopeCairn[\s\S]*?(?:pertanyaan non-coding|context berikutnya)\.[ \t]*(\n|$)/g;
+  const orphan = /# ScopeCairn[\s\S]*?(?:pertanyaan non-coding|context berikutnya|future contexts)\.[ \t]*(\n|$)/g;
   if (orphan.test(content)) {
     return { next: foldBlank(content.replace(orphan, "")), changed: true };
   }
@@ -192,9 +193,9 @@ function pruneEmptyDirs(dir: string, stop: string): void {
   }
 }
 
-// Antigravity = Rule (.agents/rules/) + Skill + Knowledge Skill + Workflow.
-// Catatan: Antigravity IDE memuat otomatis file di `.agents/rules/*.md` ke dalam <user_rules>,
-// sedangkan skills/ bersifat on-demand dan workflows/ tidak dikenal secara native.
+// Antigravity = Rule (.agents/rules/) + Skill + Knowledge Skill + Workflow + AGENTS.md (smart merge).
+// Catatan: Antigravity IDE memuat AGENTS.md langsung ke <user_rules>, sehingga blok ScopeCairn
+// di-merge di bagian bawah agar otomatis aktif tanpa menimpa detail repo user.
 export function installAntigravity(
   repoRoot: string,
   prefix = detectPrefix(repoRoot),
@@ -202,7 +203,7 @@ export function installAntigravity(
   const agentDir = detectAgentDir(repoRoot);
   const out: string[] = [];
 
-  // 1. Rule (.agents/rules/scopecairn.md) — dimuat otomatis oleh Antigravity pada setiap session & prompt
+  // 1. Rule (.agents/rules/scopecairn.md)
   const rPath = antigravityRulePath(repoRoot);
   fs.mkdirSync(path.dirname(rPath), { recursive: true });
   fs.writeFileSync(rPath, genericRuleMd(prefix));
@@ -231,7 +232,61 @@ export function installAntigravity(
   fs.mkdirSync(path.dirname(wfPath), { recursive: true });
   fs.writeFileSync(wfPath, workflowMd(prefix));
   out.push(`Workflow installed (${path.relative(repoRoot, wfPath)})`);
+
+  // 5. AGENTS.md smart merge (dimuat otomatis oleh Antigravity ke <user_rules>)
+  out.push(mergeAgentsMd(repoRoot, prefix));
+
   return out;
+}
+
+/**
+ * Gabung blok ScopeCairn ke AGENTS.md (atau agents.md) dengan mode merge (append managed block).
+ * Detail proyek milik user dipertahankan 100% utuh di atas blok ini.
+ */
+export function mergeAgentsMd(
+  repoRoot: string,
+  prefix = detectPrefix(repoRoot),
+): string {
+  const rel = findAgentsMd(repoRoot) ?? "AGENTS.md";
+  const abs = path.join(repoRoot, rel);
+  const block = genericRuleMd(prefix);
+  if (fs.existsSync(abs)) {
+    const cur = fs.readFileSync(abs, "utf8");
+    if (cur.includes(MARKER)) {
+      const { next } = removeManagedBlock(cur, (p) => genericRuleMd(p));
+      fs.writeFileSync(abs, (next ? next + "\n\n" + block : block).trimEnd() + "\n");
+      return `AGENTS.md updated (${rel})`;
+    } else {
+      const { next, changed } = removeManagedBlock(cur, (p) => genericRuleMd(p));
+      const base = changed ? next : cur;
+      fs.writeFileSync(abs, (base ? base.trimEnd() + "\n\n" + block : block).trimEnd() + "\n");
+      return `AGENTS.md merged (${rel})`;
+    }
+  } else {
+    fs.writeFileSync(abs, block.endsWith("\n") ? block : block + "\n");
+    return `AGENTS.md created (${rel})`;
+  }
+}
+
+/**
+ * Cabut blok ScopeCairn dari AGENTS.md. Bila file hanya berisi blok ScopeCairn,
+ * hapus file tersebut; bila ada detail proyek milik user, pertahankan teks user.
+ */
+export function unmergeAgentsMd(repoRoot: string): string | null {
+  const rel = findAgentsMd(repoRoot);
+  if (!rel) return null;
+  const abs = path.join(repoRoot, rel);
+  if (!fs.existsSync(abs)) return null;
+  const cur = fs.readFileSync(abs, "utf8");
+  if (!cur.includes(MARKER)) return null;
+  const { next, changed } = removeManagedBlock(cur, (p) => genericRuleMd(p));
+  if (!changed) return null;
+  if (!next.trim()) {
+    fs.rmSync(abs, { force: true });
+    return `AGENTS.md removed (${rel})`;
+  }
+  fs.writeFileSync(abs, next.trimEnd() + "\n");
+  return `AGENTS.md cleaned (${rel})`;
 }
 
 /** Path rule Antigravity (.agents/rules/scopecairn.md) — dimuat otomatis via <user_rules>. */
@@ -267,6 +322,11 @@ export function antigravityWorkflowPath(repoRoot: string): string {
 
 export function uninstallAntigravity(repoRoot: string): string[] {
   const out: string[] = [];
+
+  // 1. Bersihkan blok dari AGENTS.md (detail proyek user tetap dipertahankan)
+  const agentsClean = unmergeAgentsMd(repoRoot);
+  if (agentsClean) out.push(agentsClean);
+
   for (const dir of [".agents", ".agent"]) {
     // Hapus Rule
     const ruleP = path.join(repoRoot, dir, "rules", "scopecairn.md");

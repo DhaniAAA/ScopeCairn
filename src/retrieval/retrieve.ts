@@ -3,6 +3,7 @@ import { tokenizeTask } from "./tokenize.js";
 import { seedSearch } from "./symbolIndex.js";
 import { gitSignalsFor } from "./git.js";
 import { loadConfig, loadGlossary, type RetrievalConfig } from "./config.js";
+import { findVerifiedAnalogs, type VerifiedAnalog } from "./verified.js";
 
 export interface RankedSymbol {
   id: number;
@@ -10,8 +11,19 @@ export interface RankedSymbol {
   type: string;
   file: string;
   signature: string;
+  startLine?: number;
+  endLine?: number;
   score: number;
-  parts: { seed: number; proximity: number; centrality: number; recency: number; cochange: number };
+  parts: {
+    seed: number;
+    proximity: number;
+    centrality: number;
+    recency: number;
+    cochange: number;
+    ppr?: number;
+    pr?: number;
+    verified?: number;
+  };
   reason: string;
 }
 
@@ -21,6 +33,7 @@ export interface RetrievalResult {
   ranked: RankedSymbol[];
   config: RetrievalConfig;
   gitAvailable: boolean;
+  verifiedAnalogs?: VerifiedAnalog[];
 }
 
 function expandGlossary(tokens: string[], glossary: Map<string, string[]>): string[] {
@@ -73,12 +86,109 @@ function loadFanin(db: DatabaseSync): Map<number, number> {
   return fanin;
 }
 
+/** PageRank per simbol dari `node_metrics` (0 bila tabel belum ada). */
+function loadPagerank(db: DatabaseSync): Map<number, number> {
+  const m = new Map<number, number>();
+  try {
+    const rows = db
+      .prepare(`SELECT node_id AS id, pagerank AS pr FROM node_metrics`)
+      .all() as { id: number; pr: number }[];
+    for (const r of rows) m.set(r.id, r.pr);
+  } catch {
+    // tabel belum ada / belum dihitung — centrality jatuh ke fan-in saja
+  }
+  return m;
+}
+
+/**
+ * PPR sederhana (Personalized PageRank, 2 iterasi BFS + restart ke seed).
+ * Reuse proximity yang sudah dihitung sebagai proxy bila iterasi penuh
+ * mahal: ppr pada simpul = proximity ternormalisasi max proximity, seed
+ * bervilai seedScore. Cukup murah dan konsisten dengan sinyal graph yang
+ * sudah ada. Nilai di 0..1.
+ */
+function proximityAsPpr(
+  proximity: Map<number, number>,
+  seedScore: Map<number, number>
+): Map<number, number> {
+  const ppr = new Map<number, number>();
+  let maxProx = 0;
+  for (const v of proximity.values()) if (v > maxProx) maxProx = v;
+  if (maxProx <= 0) maxProx = 1;
+  const restart = 0.85; // faktor restart ke seed (1 - alpha)
+  for (const [id, prox] of proximity) {
+    const proxNorm = Math.min(1, prox / maxProx);
+    const seedBoost = seedScore.get(id) ?? 0;
+    // PPR proxy: mayoritas dari jarak graph, sedikit dari ke-seed-an langsung.
+    ppr.set(id, Math.min(1, restart * proxNorm + (1 - restart) * seedBoost));
+  }
+  return ppr;
+}
+
+// Simbol non-seed yang hanya dekat di graph tak boleh naik berkat fan-in saja.
+const HUB_DAMPING = 0.3;
+export const HIGH_MIN_SCORE = 0.3;
+const HIGH_RELATIVE = 0.75;
+export const HIGH_MAX_FILES = 4;
+
+export function isTestPath(p: string): boolean {
+  const norm = p.replace(/\\/g, "/");
+  return (
+    norm.includes(".test.") ||
+    norm.includes(".spec.") ||
+    norm.includes("__tests__") ||
+    /(^|\/)tests?\//.test(norm) ||
+    (norm.split("/").pop() ?? "").startsWith("test_")
+  );
+}
+
+export function isExplicitTestTask(task: string): boolean {
+  return /\b(test|tests|testing|spec|specs|suite|mock|assert)\b/i.test(task);
+}
+
+/** Tier HIGH: skor mutlak ≥ 0.3 DAN ≥ 75% skor teratas, maks HIGH_MAX_FILES file. */
+export function selectHigh(ranked: RankedSymbol[], allowTests = false): RankedSymbol[] {
+  const top = ranked[0]?.score ?? 0;
+  const above = ranked
+    .filter((r) => r.score >= HIGH_MIN_SCORE && r.score >= top * HIGH_RELATIVE)
+    .filter((r) => allowTests || !isTestPath(r.file));
+  // `above` sudah terurut skor tertinggi (ranked terurut). Ambil top-K file
+  // terbaik agar simbol di file yang sama tetap bersama, tapi file ke-5+
+  // (meski lolos ambang) tak membengkak HIGH.
+  const out: RankedSymbol[] = [];
+  const files = new Set<string>();
+  for (const r of above) {
+    if (!files.has(r.file) && files.size >= HIGH_MAX_FILES) continue;
+    files.add(r.file);
+    out.push(r);
+  }
+  return out;
+}
+
 // SEED → EXPAND → RANK (PRD FR-04 / FR-05).
 export interface RetrieveOptions {
   topN?: number;
   maxDepth?: number;
   /** Override bobot untuk tuning/benchmark ( Fase 6 ) tanpa menyentuh config.yml. */
-  weights?: Partial<Pick<RetrievalConfig, "wSeed" | "wProximity" | "wCentrality" | "wRecency" | "wCochange">>;
+  weights?: Partial<Pick<RetrievalConfig, "wSeed" | "wProximity" | "wCentrality" | "wRecency" | "wCochange" | "wPpr" | "wPr">>;
+  /** File/folder yang dipilih agent sebagai titik awal (seed skor penuh). */
+  anchors?: string[];
+}
+
+/** Simbol di file/folder anchor. Path dinormalisasi ke bentuk index (`a/b.ts`). */
+export function anchorSeeds(db: DatabaseSync, anchors: string[]): { symbolId: number; bm25: number }[] {
+  const out = new Map<number, number>();
+  const stmt = db.prepare(
+    `SELECT s.id FROM symbols s JOIN files f ON f.id = s.file_id
+     WHERE (f.path = ? OR f.path LIKE ? ESCAPE '\\')`
+  );
+  for (const raw of anchors) {
+    const a = raw.trim().replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/+$/, "");
+    if (!a) continue;
+    const esc = a.replace(/[\\%_]/g, (c) => "\\" + c);
+    for (const r of stmt.all(a, `${esc}/%`) as { id: number }[]) out.set(r.id, 1);
+  }
+  return [...out].map(([symbolId, bm25]) => ({ symbolId, bm25 }));
 }
 
 export function retrieve(
@@ -95,6 +205,39 @@ export function retrieve(
   const baseTokens = tokenizeTask(task);
   const tokens = expandGlossary(baseTokens, loadGlossary(repoRoot));
   const seeds = seedSearch(db, tokens);
+  if (opts?.anchors?.length) {
+    const lexical = new Map(seeds.map((s) => [s.symbolId, s]));
+    for (const a of anchorSeeds(db, opts.anchors)) lexical.set(a.symbolId, a);
+    seeds.splice(0, seeds.length, ...lexical.values());
+  }
+
+  // CLOSED-LOOP LEARNING: Cek task terverifikasi terdahulu yang mirip
+  const verifiedAnalogs = findVerifiedAnalogs(db, task);
+  const verifiedFileWeights = new Map<string, number>();
+  for (const va of verifiedAnalogs) {
+    for (const f of va.files) {
+      const cur = verifiedFileWeights.get(f) ?? 0;
+      if (va.score > cur) verifiedFileWeights.set(f, va.score);
+    }
+  }
+
+  if (verifiedFileWeights.size > 0) {
+    const stmt = db.prepare(
+      `SELECT s.id FROM symbols s JOIN files f ON f.id = s.file_id WHERE f.path = ?`
+    );
+    const seedMap = new Map(seeds.map((s) => [s.symbolId, s]));
+    for (const [vf, weight] of verifiedFileWeights) {
+      const symRows = stmt.all(vf) as { id: number }[];
+      const boostBm25 = Math.min(1.0, 0.6 + weight * 0.4);
+      for (const r of symRows) {
+        const existing = seedMap.get(r.id);
+        if (!existing || existing.bm25 < boostBm25) {
+          seedMap.set(r.id, { symbolId: r.id, bm25: boostBm25 });
+        }
+      }
+    }
+    seeds.splice(0, seeds.length, ...seedMap.values());
+  }
   const seedScore = new Map(seeds.map((s) => [s.symbolId, s.bm25]));
 
   // EXPAND: BFS dari seed via relationships, bobot menurun per hop.
@@ -148,15 +291,19 @@ export function retrieve(
     if (frontier.length === 0) break;
   }
 
-  // Centrality: fan-in (jumlah relasi masuk) ternormalisasi.
-  // Sumber: cache tabel `fanin` (diisi scan). Tanpa cache ini, pemanggilan
-  // retrieve() memindai SELURUH tabel relationships (O(E)) hanya untuk
-  // menjumlahkan fan-in — di repo besar itu mendominasi waktu/context.
+  // Centrality: 0.5*pr_norm + 0.5*fanin_norm (PageRank ternormalisasi max).
+  // Sumber fan-in: cache tabel `fanin` (diisi scan). PageRank dari
+  // `node_metrics` bila ada; bila tidak ada, pr_norm = fanin_norm sehingga
+  // centrality identik dengan fanin murni (perilaku lama).
   const fanin = loadFanin(db);
   let maxFan = 1;
   for (const n of fanin.values()) {
     if (n > maxFan) maxFan = n;
   }
+  const pagerank = loadPagerank(db);
+  let maxPr = 0.000001;
+  for (const v of pagerank.values()) if (v > maxPr) maxPr = v;
+  const pprMap = proximityAsPpr(proximity, seedScore);
 
   // Seed files untuk sinyal git.
   const seedFiles = new Set<string>();
@@ -171,7 +318,7 @@ export function retrieve(
   const git = gitSignalsFor(db, repoRoot, [...seedFiles]);
 
   // RANK: gabungkan 5 sinyal.
-  const meta = new Map<number, { name: string; type: string; file: string; signature: string }>();
+  const meta = new Map<number, { name: string; type: string; file: string; signature: string; startLine: number; endLine: number }>();
   if (visited.size > 0) {
     // Dibelah per 900 id: `visited` pada repo besar bisa melampaui batas
     // variabel terikat SQLite → statement gagal total (bukan hasil kosong).
@@ -181,10 +328,10 @@ export function retrieve(
       const ph = c.map(() => "?").join(",");
       for (const r of db
         .prepare(
-          `SELECT s.id, s.name, s.type, s.signature, f.path AS file FROM symbols s
+          `SELECT s.id, s.name, s.type, s.signature, s.start_line AS startLine, s.end_line AS endLine, f.path AS file FROM symbols s
            JOIN files f ON f.id = s.file_id WHERE s.id IN (${ph})`
         )
-        .all(...c) as { id: number; name: string; type: string; signature: string; file: string }[]) {
+        .all(...c) as { id: number; name: string; type: string; signature: string; startLine: number; endLine: number; file: string }[]) {
         meta.set(r.id, r);
       }
     }
@@ -199,16 +346,34 @@ export function retrieve(
       continue; // file diringkas dari simbolnya — kecuali fallback di bawah
     }
     const seed = seedScore.get(id) ?? 0;
-    const centrality = (fanin.get(id) ?? 0) / maxFan;
+    const faninNorm = (fanin.get(id) ?? 0) / maxFan;
+    // Tanpa node_metrics, pr_norm = faninNorm → centrality = faninNorm
+    // (pertahankan perilaku lama). Bila ada PageRank, centrality digabung
+    // 50/50 antara PR global dan fan-in lokal.
+    const prNorm = pagerank.size > 0 ? (pagerank.get(id) ?? 0) / maxPr : faninNorm;
+    const centrality =
+      (0.5 * prNorm + 0.5 * faninNorm) * (seed > 0.05 ? 1 : HUB_DAMPING);
     const recency = git.recency.get(m.file) ?? 0;
     const cochange = git.cochange.get(m.file) ?? 0;
-    const score =
+    const verifiedWeight = verifiedFileWeights.get(m.file) ?? 0;
+    const ppr = pprMap.get(id) ?? 0;
+    const pr = prNorm;
+    const isTestTask = isExplicitTestTask(task);
+    const isTest = isTestPath(m.file);
+    let score =
       config.wSeed * seed +
       config.wProximity * Math.min(1, prox) +
       config.wCentrality * centrality +
       config.wRecency * recency +
-      config.wCochange * cochange;
+      config.wCochange * cochange +
+      (config.wPpr ?? 0) * ppr +
+      (config.wPr ?? 0) * pr +
+      (verifiedWeight > 0 ? verifiedWeight * 0.35 : 0);
+    if (isTest && !isTestTask) {
+      score *= 0.35;
+    }
     const why: string[] = [];
+    if (verifiedWeight > 0) why.push("verified");
     if (seed > 0.05) why.push("seed");
     if (prox > 0.05 && seed <= 0.05) why.push("graph");
     if (centrality > 0.3) why.push("central");
@@ -220,8 +385,19 @@ export function retrieve(
       type: m.type,
       file: m.file,
       signature: m.signature,
+      startLine: m.startLine,
+      endLine: m.endLine,
       score,
-      parts: { seed, proximity: Math.min(1, prox), centrality, recency, cochange },
+      parts: {
+        seed,
+        proximity: Math.min(1, prox),
+        centrality,
+        recency,
+        cochange,
+        ppr,
+        pr,
+        verified: verifiedWeight,
+      },
       reason: why.join("+") || "graph",
     });
   }
@@ -269,5 +445,12 @@ export function retrieve(
     }
     ranked.sort((a, b) => b.score - a.score);
   }
-  return { tokens, seeds: seeds.map((s) => s.symbolId), ranked: ranked.slice(0, config.topN), config, gitAvailable: git.available };
+  return {
+    tokens,
+    seeds: seeds.map((s) => s.symbolId),
+    ranked: ranked.slice(0, config.topN),
+    config,
+    gitAvailable: git.available,
+    verifiedAnalogs: verifiedAnalogs.length > 0 ? verifiedAnalogs : undefined,
+  };
 }

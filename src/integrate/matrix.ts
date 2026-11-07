@@ -7,14 +7,14 @@ import {
 } from "./templates.js";
 
 // Matriks agent: tiap agent dilayani lewat mekanisme native-nya sendiri
-// (skill, rules, command) — ScopeCairn TIDAK menulis AGENTS.md/CLAUDE.md,
-// karena file itu milik detail repo user, bukan instruksi tool.
+// (skill, rules, command). Untuk Antigravity, AGENTS.md digabung lewat
+// managed block (append-only) agar otomatis aktif tanpa merusak detail repo user.
 //
 // Skill knowledge (read-only: explain/summarize/audit) dipasang sebagai
 // `extra` di mekanisme "skill" native tiap agent: .claude/skills,
 // .cursor/skills (Cursor >= 2.4), .windsurf/skills, .github/skills
-// (Copilot/VS Code), .kiro/skills, .opencode/skills. Hanya salinan Claude
-// yang memuat `allowed-tools`.
+// (Copilot/VS Code), .kiro/skills, .opencode/skills, .qoder/skills. Hanya
+// salinan Claude yang memuat `allowed-tools`.
 
 export interface AgentTarget {
   id: string;
@@ -117,6 +117,23 @@ export const AGENT_MATRIX: AgentTarget[] = [
     extra: [
       {
         rel: ".opencode/skills/scopecairn-knowledge/SKILL.md",
+        render: knowledgeSkillMd,
+      },
+    ],
+  },
+  {
+    // Qoder: rule tanpa frontmatter = always active (docs.qoder.com/cli/memory);
+    // skills dicari di .qoder/skills/{name}/SKILL.md. AGENTS.md juga dibaca
+    // sebagai compatibility source, jadi blok dari target lain tetap berlaku.
+    id: "qoder",
+    label: "Qoder",
+    rel: ".qoder/rules/scopecairn.md",
+    mode: "new",
+    render: genericRuleMd,
+    presentMarker: ".qoder",
+    extra: [
+      {
+        rel: ".qoder/skills/scopecairn-knowledge/SKILL.md",
         render: knowledgeSkillMd,
       },
     ],

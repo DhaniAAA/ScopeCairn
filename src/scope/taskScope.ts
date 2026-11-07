@@ -41,6 +41,10 @@ export function persistScope(db: DatabaseSync, taskId: number, scope: TaskScope)
   put("protected", scope.protected);
 }
 
+function normalizeTaskStr(t: string): string {
+  return t.toLowerCase().replace(/[^\w\s]/g, " ").replace(/\s+/g, " ").trim();
+}
+
 /**
  * Ambil scope dari task TERAKHIR dengan deskripsi yang sama.
  * "Terakhir" penting: `context --escalate` membuat task baru dengan deskripsi
@@ -62,6 +66,24 @@ export function loadPersistedScope(
       .get(task) as { id: number } | undefined;
   } catch {
     return null;
+  }
+  if (!row) {
+    try {
+      const candidates = db
+        .prepare(
+          `SELECT t.id AS id, t.description AS description FROM tasks t
+           WHERE EXISTS (SELECT 1 FROM task_scope s WHERE s.task_id = t.id)
+           ORDER BY t.id DESC LIMIT 30`
+        )
+        .all() as { id: number; description: string }[];
+      const normInput = normalizeTaskStr(task);
+      if (normInput) {
+        const found = candidates.find((c) => normalizeTaskStr(c.description) === normInput);
+        if (found) row = { id: found.id };
+      }
+    } catch {
+      return null;
+    }
   }
   if (!row) return null;
 

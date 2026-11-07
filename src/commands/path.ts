@@ -8,6 +8,16 @@ export function cmdPath(repoRoot: string, from: string, to: string, opts: { json
   const db = openDb(repoRoot);
   try {
     logInvocation(db, "path");
+    // Fase 4.3: no index → exit 1 (samakan doctor: set exitCode, jangan exit()).
+    const fileCount = (
+      db.prepare(`SELECT COUNT(*) AS n FROM files`).get() as { n: number }
+    ).n;
+    if (fileCount === 0) {
+      if (opts.json) console.log(JSON.stringify({ from, to, error: "Index kosong. Jalankan `scopecairn scan` dulu." }, null, 2));
+      else console.log("Index kosong. Jalankan `scopecairn scan` dulu.");
+      process.exitCode = 1;
+      return;
+    }
     const aHits = findSymbols(db, from);
     const bHits = findSymbols(db, to);
     if (aHits.length === 0) {

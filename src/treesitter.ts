@@ -25,21 +25,23 @@ export async function prepareTreeSitter(names: Iterable<string>): Promise<void> 
   }
 }
 
+const parserCache = new Map<string, Parser>();
+
 export function withSyntaxTree<T>(name: string, source: string, visit: (root: Node) => T): T {
   const language = languages.get(name);
   if (!language) throw new Error(`Grammar ${name} belum siap; panggil prepareTreeSitter terlebih dahulu`);
-  const parser = new Parser();
+  let parser = parserCache.get(name);
+  if (!parser) {
+    parser = new Parser();
+    parserCache.set(name, parser);
+  }
+  parser.setLanguage(language);
+  const tree = parser.parse(source);
+  if (!tree) throw new Error(`Gagal parse grammar ${name}`);
   try {
-    parser.setLanguage(language);
-    const tree = parser.parse(source);
-    if (!tree) throw new Error(`Gagal parse grammar ${name}`);
-    try {
-      return visit(tree.rootNode);
-    } finally {
-      tree.delete();
-    }
+    return visit(tree.rootNode);
   } finally {
-    parser.delete();
+    tree.delete();
   }
 }
 

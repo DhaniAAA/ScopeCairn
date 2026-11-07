@@ -127,8 +127,8 @@ export function computeBetweenness(db: DatabaseSync): Map<number, number> {
     sigma.set(s, 1);
     dist.set(s, 0);
     const queue: number[] = [s];
-    while (queue.length > 0) {
-      const v = queue.shift()!;
+    for (let qi = 0; qi < queue.length; qi++) {
+      const v = queue[qi];
       stack.push(v);
       for (const w of adj.get(v) ?? []) {
         if ((dist.get(w) ?? -1) < 0) {

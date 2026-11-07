@@ -1,23 +1,29 @@
 # /scopecairn
 
-Shortcut manual bila agent lupa menjalankan protokol otomatis ScopeCairn.
+Manual shortcut if the agent forgets to run the automated ScopeCairn protocol.
 
-Prinsip Otomatis:
-- Laziness Protocol (diff minimal, no slop, dilarang menambah layer abstraksi baru).
-- Blast Radius: Simbol bersama wajib impact + safety fact + buktikan dengan tes.
-- Anti-Looping: 2x gagal perbaiki bug pada tes yang sama → dilarang coba cara ke-3 dengan asumsi serupa; serang premis dasar secara independen.
-- Prove It Works: Selalu buktikan perbaikan/fitur dengan tes nyata sebelum menyatakan selesai.
-- Transparansi Status: Awali respon dengan 1 baris penanda scope, misal: `> 🧭 [ScopeCairn: ...]`.
+Automated Principles:
+- Laziness Protocol (minimal diff, no slop, never add unnecessary abstraction layers).
+- Blast Radius: Shared symbols require impact + safety fact + proof via tests.
+- Anti-Looping: 2x failure on the same test → stop and attack underlying premises independently before a 3rd try.
+- Prove It Works: Always prove fixes/features with real tests before declaring completion.
+- Status Cue: Start response with a 1-line scope indicator, e.g. `> 🧭 [ScopeCairn: ...]`.
 
-Langkah Alur Kerja:
-1. Jika prompt user panjang/kompleks, ambil 2–4 kata kunci teknis utama sebagai argumen context.
-2. Jalankan `scopecairn context "<kata kunci teknis>"` (jika file target belum diketahui atau untuk mengunci scope).
-3. Ikuti Relevant Files dan Task Scope (Required & Optional; dilarang sentuh Protected tanpa izin).
-4. Perlu periksa dampak perubahan? `scopecairn impact <path> --run-tests`.
-5. Perlu source simbol? `scopecairn read symbol <nama>`.
-6. Keputusan arsitektur disepakati? `scopecairn decide "<pilihan> karena <alasan>"`.
-7. Sebelum menyatakan selesai:
-   - Adversarial self-review: periksa input null/undefined/edge-cases, async race condition, kompatibilitas OS.
-   - Buktikan perubahan dengan test nyata.
-   - Jalankan `scopecairn scan`, lalu `scopecairn verify --task "<kata kunci teknis>" --strict`
-     — memastikan file yang diubah tidak bocor ke luar scope.
+Workflow Steps:
+1. At the start of a session, run `scopecairn session load` to inspect previous state and commits/files changed since the last save.
+2. If user prompt is long/complex, extract 2–4 technical keywords as context arguments.
+3. Run `scopecairn context "<technical keywords>"` (if target files are unknown or to lock scope). For score debugging, add `--explain`; for human copy, add `--format brief|table|tree|mermaid`; for fast rescan after a small change, prefer `scan --changed-only`.
+4. Follow Relevant Files and Task Scope (Required & Optional; never touch Protected without approval).
+5. Before creating a new function or class, run `scopecairn reuse "<description or signature>"`.
+6. Need to check impact of changes? `scopecairn impact <path> --run-tests`.
+7. Need symbol source code? `scopecairn read symbol <name>` (multi: `scopecairn read symbol a b c --full --with-callers`).
+8. Check dependencies? `scopecairn deps` (offline, from manifests).
+9. Before PR/merge? `scopecairn verify --pr-risk --sarif --base origin/main`.
+10. Architectural decision settled? `scopecairn decide "<choice> because <why>"`.
+11. Before declaring completion:
+   - Adversarial self-review: check null/undefined/edge-cases, async race conditions, OS compatibility.
+   - Prove changes with real tests.
+   - Run `scopecairn scan`, `scopecairn dead`, then `scopecairn verify --task "<technical keywords>" --strict`
+     — ensuring no dead code was introduced and modified files did not leak outside scope.
+   - Save session state via `scopecairn session save --working "<summary>" --decisions "<decisions>" --next "<next>" --blockers "<blockers>" --files "<files>"`.
+Prereq (CI): `scan --lsp` only when LSP exists; `benchmark --tune` reports nDCG/MRR for weight calibration.

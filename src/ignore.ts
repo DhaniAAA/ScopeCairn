@@ -10,11 +10,13 @@ const DEFAULT_DIR_IGNORES = [
   ".next/",
   "dist/",
   "build/",
+  "target/",
   "coverage/",
   ".scopecairn/",
 ];
 
 const DEFAULT_FILE_IGNORES = [
+  ".scopecairn/session.md",
   ".env",
   ".env.*",
   "*.pem",

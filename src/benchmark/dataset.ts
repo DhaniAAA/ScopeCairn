@@ -30,7 +30,7 @@ export const BENCHMARK_TASKS: BenchmarkTask[] = [
   },
   {
     task: "Symbol extraction typescript functions classes",
-    expected: ["src/extract/typescript.ts", "src/extract/types.ts"],
+    expected: ["src/extract/treeSitter.ts", "src/extract/types.ts"],
   },
   {
     task: "Invocation logging compliance rate",
@@ -87,5 +87,33 @@ export const BENCHMARK_TASKS: BenchmarkTask[] = [
   {
     task: "Tokenizer stemming plural forms",
     expected: ["src/retrieval/tokenize.ts", "src/retrieval/symbolIndex.ts"],
+  },
+  {
+    task: "Fastify routes handlers registration",
+    expected: ["src/adapters/fastify.ts", "src/adapters/index.ts"],
+  },
+  {
+    task: "Rails routes resources mapping",
+    expected: ["src/adapters/rails.ts", "src/adapters/index.ts"],
+  },
+  {
+    task: "Watch debounce file watcher refresh",
+    expected: ["src/commands/watch.ts", "src/refresh.ts"],
+  },
+  {
+    task: "Dependencies unused detection manifests",
+    expected: ["src/commands/deps.ts"],
+  },
+  {
+    task: "Verify PR risk aggregate fan-in",
+    expected: ["src/commands/verify.ts"],
+  },
+  {
+    task: "LSP detection scan optional",
+    expected: ["src/extract/lsp.ts", "src/commands/scan.ts"],
+  },
+  {
+    task: "Doctor status health check cache",
+    expected: ["src/commands/doctor.ts", "src/commands/status.ts"],
   },
 ];

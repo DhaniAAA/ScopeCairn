@@ -2,15 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { openDb } from "../db.js";
-
-export function isTestPath(p: string): boolean {
-  return (
-    p.includes(".test.") ||
-    p.includes(".spec.") ||
-    p.includes("__tests__") ||
-    path.basename(p).startsWith("test_")
-  );
-}
+import { isTestPath } from "../retrieval/retrieve.js";
+export { isTestPath };
 
 export interface TestSelectResult {
   target: string;
@@ -59,6 +52,23 @@ function planNpm(binName: "npx" | "npm", args: string[]): RunnerPlan {
  * (hasil scan repo), jadi HARUS tetap per-element — tidak boleh digabung
  * menjadi string yang lalu di-`split`.
  */
+function hasRootFileWithPrefix(repoRoot: string, prefix: string): boolean {
+  try {
+    return fs.readdirSync(repoRoot).some((f) => f.startsWith(prefix));
+  } catch {
+    return false;
+  }
+}
+
+function hasRootFileWithSuffixes(repoRoot: string, suffixes: string[]): boolean {
+  try {
+    const entries = fs.readdirSync(repoRoot);
+    return entries.some((f) => suffixes.some((s) => f.endsWith(s)));
+  } catch {
+    return false;
+  }
+}
+
 export function detectTestRunnerPlan(
   repoRoot: string,
   testFiles: string[]
@@ -74,6 +84,26 @@ export function detectTestRunnerPlan(
       }
       if (testScript.includes("jest")) {
         return planNpm("npx", ["jest", ...testFiles]);
+      }
+      // Fase 4.4: Playwright / Cypress (cek script + config root).
+      // Harus SEBELUM fallback `npm test` generik di bawah.
+      if (
+        testScript.includes("playwright") ||
+        hasRootFileWithPrefix(repoRoot, "playwright.config.")
+      ) {
+        return planNpm("npx", ["playwright", "test", ...testFiles]);
+      }
+      if (
+        testScript.includes("cypress") ||
+        hasRootFileWithPrefix(repoRoot, "cypress.config.") ||
+        fs.existsSync(path.join(repoRoot, "cypress.json"))
+      ) {
+        return planNpm("npx", [
+          "cypress",
+          "run",
+          "--spec",
+          testFiles.join(","),
+        ]);
       }
       if (testScript.includes("tsx --test") || testScript.includes("node --test")) {
         return planNpm("npx", ["tsx", "--test", ...testFiles]);
@@ -99,6 +129,16 @@ export function detectTestRunnerPlan(
   // Check Rust
   if (fs.existsSync(path.join(repoRoot, "Cargo.toml"))) {
     return plan(["cargo", "test"]);
+  }
+
+  // Fase 4.4: Maven (pom.xml) — `mvn test` menjalankan semua test terdeteksi.
+  if (fs.existsSync(path.join(repoRoot, "pom.xml"))) {
+    return plan(["mvn", "test"]);
+  }
+
+  // Fase 4.4: .NET (satu .csproj/.sln di root) — `dotnet test`.
+  if (hasRootFileWithSuffixes(repoRoot, [".csproj", ".sln"])) {
+    return plan(["dotnet", "test"]);
   }
 
   return undefined;

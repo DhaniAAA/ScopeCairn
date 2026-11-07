@@ -108,3 +108,25 @@ for (const [path, source, expected] of [
     assert.ok(result.symbols.some((s) => s.name === expected && ["function", "method"].includes(s.type)), JSON.stringify(result));
   });
 }
+
+test("ekstraksi grouped imports pada Rust", () => {
+  const result = extractFile("src/lib.rs", `use std::collections::{HashMap, HashSet as HSet};`);
+  assert.ok(result.imports?.some((i) => i.localName === "HashMap" && i.importedName === "HashMap" && i.moduleSpecifier === "std::collections"));
+  assert.ok(result.imports?.some((i) => i.localName === "HSet" && i.importedName === "HashSet" && i.moduleSpecifier === "std::collections"));
+});
+
+test("ekstraksi signature fungsi multi-baris menjaga parameter dan return type", () => {
+  const result = extractFile("src/service.ts", `
+export async function processPayment(
+  userId: string,
+  amount: number
+): Promise<boolean> {
+  return true;
+}
+`);
+  const sym = result.symbols.find((s) => s.name === "processPayment");
+  assert.ok(sym, "simbol processPayment harus diekstrak");
+  assert.ok(sym.signature.includes("userId: string"), "signature harus memuat parameter multi-baris");
+  assert.ok(sym.signature.includes("Promise<boolean>"), "signature harus memuat return type");
+});
+

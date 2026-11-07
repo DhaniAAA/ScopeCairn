@@ -12,11 +12,12 @@ export interface GraphOptions {
   to?: string;
   export?: string;
   out?: string;
+  budget?: number;
 }
 
 export function cmdGraph(repoRoot: string, key?: string, opts: GraphOptions = {}): void {
   if (opts.export) {
-    cmdExport(repoRoot, opts.export, opts.out);
+    cmdExport(repoRoot, opts.export, opts.out, opts.budget);
     return;
   }
   if (!key) {
@@ -31,6 +32,16 @@ export function cmdGraph(repoRoot: string, key?: string, opts: GraphOptions = {}
   const db = openDb(repoRoot);
   try {
     logInvocation(db, "graph");
+    // Fase 4.3: no index → exit 1 (samakan doctor: set exitCode, jangan exit()).
+    const fileCount = (
+      db.prepare(`SELECT COUNT(*) AS n FROM files`).get() as { n: number }
+    ).n;
+    if (fileCount === 0) {
+      if (opts.json) console.log(JSON.stringify({ key, error: "Index kosong. Jalankan `scopecairn scan` dulu." }, null, 2));
+      else console.log("Index kosong. Jalankan `scopecairn scan` dulu.");
+      process.exitCode = 1;
+      return;
+    }
     const hits = findSymbols(db, key);
     if (hits.length === 0) {
       if (opts.json) console.log(JSON.stringify({ key, error: `No symbol or file matching "${key}".` }, null, 2));

@@ -12,6 +12,12 @@ export type SourceLanguage =
   | "ruby"
   | "html"
   | "vue"
+  | "kotlin"
+  | "dart"
+  | "shell"
+  | "sql"
+  | "graphql"
+  | "proto"
   | "other";
 
 const EXT_MAP: Record<string, SourceLanguage> = {
@@ -40,6 +46,15 @@ const EXT_MAP: Record<string, SourceLanguage> = {
   ".html": "html",
   ".htm": "html",
   ".vue": "vue",
+  ".kt": "kotlin",
+  ".kts": "kotlin",
+  ".dart": "dart",
+  ".sh": "shell",
+  ".bash": "shell",
+  ".sql": "sql",
+  ".graphql": "graphql",
+  ".gql": "graphql",
+  ".proto": "proto",
 };
 
 export function detectLanguage(filePath: string): SourceLanguage {

@@ -97,11 +97,19 @@ function resolveModuleFile(
   spec: string
 ): ResolvedModule | null {
   const dir = fromRel.includes("/") ? fromRel.slice(0, fromRel.lastIndexOf("/")) : "";
-  const joined = spec.startsWith(".")
-    ? path.posix.normalize((dir ? dir + "/" : "") + spec)
-    : spec;
+  let normalizedSpec = spec;
+  if (spec.startsWith("@/") || spec.startsWith("~/")) {
+    normalizedSpec = spec.replace(/^[@~]\//, "src/");
+  }
+
+  const joined = normalizedSpec.startsWith(".")
+    ? path.posix.normalize((dir ? dir + "/" : "") + normalizedSpec)
+    : normalizedSpec;
 
   const bases = [joined];
+  if (normalizedSpec !== spec) {
+    bases.push(spec.replace(/^[@~]\//, ""));
+  }
   const jsExt = joined.match(/\.(js|mjs|cjs|jsx)$/);
   if (jsExt) {
     const stripped = joined.slice(0, -(jsExt[0].length));
@@ -117,6 +125,10 @@ function resolveModuleFile(
     joined + "/index.ts",
     joined + "/index.js",
   ];
+  if (normalizedSpec !== spec) {
+    const alt = spec.replace(/^[@~]\//, "");
+    candidates.push(alt + ".ts", alt + ".tsx", alt + ".js", alt + "/index.ts");
+  }
   for (const c of candidates) {
     const r = db
       .prepare(`SELECT id FROM files WHERE path = ?`)
@@ -326,9 +338,20 @@ export function indexFileRelations(
         const targetMod = resolveModuleFile(db, relPath, imp.moduleSpecifier);
         if (targetMod) {
           const symName = imp.importedName === "default" || imp.importedName === "*" ? r.to : imp.importedName;
-          const sym = db
+          let sym = db
             .prepare(`SELECT id FROM symbols WHERE file_id = ? AND name = ? AND type IN ('interface', 'type', 'class', 'model') LIMIT 1`)
             .get(targetMod.fileId, symName) as { id: number } | undefined;
+          if (!sym) {
+            sym = db
+              .prepare(
+                `SELECT s.id FROM symbols s
+                 JOIN symbols barrelSym ON barrelSym.file_id = ? AND barrelSym.type = 'file'
+                 JOIN relationships rel ON rel.source_id = barrelSym.id AND rel.relationship_type = 'EXPORTS'
+                 JOIN symbols reExportedSym ON reExportedSym.id = rel.target_id AND reExportedSym.type = 'file'
+                 WHERE s.file_id = reExportedSym.file_id AND s.name = ? AND s.type IN ('interface', 'type', 'class', 'model') LIMIT 1`
+              )
+              .get(targetMod.fileId, symName) as { id: number } | undefined;
+          }
           if (sym) dst = sym.id;
         }
       }
@@ -479,9 +502,20 @@ export function indexFileRelations(
         const targetMod = resolveModuleFile(db, relPath, imp.moduleSpecifier);
         if (targetMod) {
           const symName = imp.importedName === "default" || imp.importedName === "*" ? r.to : imp.importedName;
-          const sym = db
+          let sym = db
             .prepare(`SELECT id FROM symbols WHERE file_id = ? AND name = ? AND type != 'file' LIMIT 1`)
             .get(targetMod.fileId, symName) as { id: number } | undefined;
+          if (!sym) {
+            sym = db
+              .prepare(
+                `SELECT s.id FROM symbols s
+                 JOIN symbols barrelSym ON barrelSym.file_id = ? AND barrelSym.type = 'file'
+                 JOIN relationships rel ON rel.source_id = barrelSym.id AND rel.relationship_type = 'EXPORTS'
+                 JOIN symbols reExportedSym ON reExportedSym.id = rel.target_id AND reExportedSym.type = 'file'
+                 WHERE s.file_id = reExportedSym.file_id AND s.name = ? AND s.type != 'file' LIMIT 1`
+              )
+              .get(targetMod.fileId, symName) as { id: number } | undefined;
+          }
           if (sym) {
             dst = sym.id;
             conf = 0.95;
@@ -522,9 +556,49 @@ export function indexFileRelations(
     }
 
     const src = resolveLocal(r.from);
-    const dst = ids.get(r.to) ?? globalSymbolId(db, r.to, srcDir);
+    if (!src) continue;
+    let dst: number | null = ids.get(r.to) ?? symbolIdInFile(db, fileId, r.to);
+    let conf = r.confidence;
+    if (!dst && localImports.has(r.to)) {
+      const imp = localImports.get(r.to)!;
+      const targetMod = resolveModuleFile(db, relPath, imp.moduleSpecifier);
+      if (targetMod) {
+        const symName = imp.importedName === "default" || imp.importedName === "*" ? r.to : imp.importedName;
+        let sym = db
+          .prepare(`SELECT id FROM symbols WHERE file_id = ? AND name = ? AND type != 'file' LIMIT 1`)
+          .get(targetMod.fileId, symName) as { id: number } | undefined;
+        if (!sym) {
+          sym = db
+            .prepare(
+              `SELECT s.id FROM symbols s
+               JOIN symbols barrelSym ON barrelSym.file_id = ? AND barrelSym.type = 'file'
+               JOIN relationships rel ON rel.source_id = barrelSym.id AND rel.relationship_type = 'EXPORTS'
+               JOIN symbols reExportedSym ON reExportedSym.id = rel.target_id AND reExportedSym.type = 'file'
+               WHERE s.file_id = reExportedSym.file_id AND s.name = ? AND s.type != 'file' LIMIT 1`
+            )
+            .get(targetMod.fileId, symName) as { id: number } | undefined;
+        }
+        if (sym) {
+          dst = sym.id;
+          conf = 0.95;
+        }
+      }
+    }
+    if (!dst && importedFileIds.size > 0) {
+      const ph = [...importedFileIds].map(() => "?").join(",");
+      const sym = db
+        .prepare(`SELECT id FROM symbols WHERE file_id IN (${ph}) AND name = ? AND type != 'file' LIMIT 1`)
+        .get(...importedFileIds, r.to) as { id: number } | undefined;
+      if (sym) {
+        dst = sym.id;
+        conf = 0.7;
+      }
+    }
+    if (!dst && r.rel !== "REFERENCES") {
+      dst = globalSymbolId(db, r.to, srcDir);
+    }
     if (src && dst && src !== dst) {
-      insRel.run(src, dst, r.rel, r.weight, r.confidence, evidenceOf(r.rel as RelationType, r.confidence, r.methodCall));
+      insRel.run(src, dst, r.rel, r.weight, conf, evidenceOf(r.rel as RelationType, conf, r.methodCall));
       rels++;
     }
   }

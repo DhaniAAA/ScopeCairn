@@ -1,5 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { DEFINITION_OF_DONE } from "./guard.js";
+import { isTestPath } from "../retrieval/retrieve.js";
+export { isTestPath };
 
 // Penilai Definition of Done (PRD §15). Hanya item yang benar-benar bisa
 // diverifikasi mesin yang diberi status pass/warn/fail; sisanya `manual` —
@@ -81,15 +83,7 @@ const RULES: Record<string, Rule> = {
       : { status: "warn", detail: "dilewati (--no-refresh): jalankan `scopecairn scan` sebelum commit" },
 };
 
-/** File test yang relevan bagi file yang berubah. */
-export function isTestPath(p: string): boolean {
-  return (
-    p.includes(".test.") ||
-    p.includes(".spec.") ||
-    p.includes("__tests__") ||
-    (p.split("/").pop() ?? "").startsWith("test_")
-  );
-}
+/** File test yang relevan bagi file yang berubah (delegasi ke retrieve.isTestPath). */
 
 /**
  * Test terdampak dari file yang berubah. Edge `TESTS` berarah test -> file

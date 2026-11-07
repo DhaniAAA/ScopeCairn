@@ -9,6 +9,8 @@ export interface ScanOptions {
   clean?: boolean;
   watch?: boolean;
   debounce?: number;
+  changedOnly?: boolean;
+  lsp?: boolean;
 }
 
 export async function cmdScan(repoRoot: string, opts: ScanOptions = {}): Promise<void> {
@@ -32,7 +34,7 @@ export async function cmdScan(repoRoot: string, opts: ScanOptions = {}): Promise
 
   console.log("ScopeCairn");
   console.log("✓ Repository detected");
-  const stats = await scanRepository(repoRoot);
+  const stats = await scanRepository(repoRoot, { changedOnly: opts.changedOnly === true, lsp: opts.lsp === true });
   // Compliance (AI-5): `scan` menutup loop prompt → context → kerja → refresh,
   // jadi ikut dicatat. Mode watch tidak lewat sini agar log tidak banjir.
   try {
@@ -54,6 +56,14 @@ export async function cmdScan(repoRoot: string, opts: ScanOptions = {}): Promise
   console.log(`✓ ${stats.relationships} relationships`);
   if (stats.adapters.length > 0) {
     console.log(`✓ adapters: ${stats.adapters.join(", ")}`);
+  }
+  if (stats.lsp) {
+    const found = [
+      stats.lsp.tsserver ? "tsserver" : null,
+      stats.lsp.gopls ? "gopls" : null,
+      stats.lsp.pyright ? "pyright" : null,
+    ].filter(Boolean);
+    console.log(`✓ lsp: ${found.length > 0 ? found.join(", ") : "none in PATH (opsional, scan tetap penuh)"}`);
   }
   if (stats.graphWritten) {
     console.log(`✓ GRAPH.md updated (.scopecairn/GRAPH.md)`);

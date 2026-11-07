@@ -29,6 +29,11 @@ function stemVariants(t: string): string[] {
     out.add(base);
     // configuration → configur + e? tidak — petakan eksplisit di bawah.
   }
+  // -er/-ed: tokenizer → tokenize, parser → parse.
+  if ((t.endsWith("er") || t.endsWith("ed")) && t.length > 5) {
+    out.add(t.slice(0, -1));
+    out.add(t.slice(0, -2));
+  }
   return [...out];
 }
 
@@ -44,6 +49,55 @@ const EXPLICIT_STEM = new Map<string, string>([
   ["dependency", "depend"],
   ["extraction", "extract"],
   ["extracted", "extract"],
+]);
+
+// Sinonim domain minimal (recall seed): istilah domain <-> istilah kode.
+// Bidirectional: kupon <-> voucher, invoice <-> billing, dst. Hanya tambah
+// mapping — tidak menghapus EXPLICIT_STEM di atas.
+const DOMAIN_SYNONYMS = new Map<string, string>([
+  // Kupon / diskon
+  ["kupon", "voucher"],
+  ["voucher", "kupon"],
+  ["coupon", "voucher"],
+  ["promo", "voucher"],
+  ["diskon", "discount"],
+  ["discount", "diskon"],
+  // Penagihan
+  ["invoice", "billing"],
+  ["billing", "invoice"],
+  ["tagihan", "invoice"],
+  ["pembayaran", "payment"],
+  ["payment", "pembayaran"],
+  ["pelunasan", "payment"],
+  // Pengguna / akun
+  ["pengguna", "user"],
+  ["akun", "account"],
+  ["account", "akun"],
+  // Keranjang / pesanan
+  ["keranjang", "cart"],
+  ["cart", "keranjang"],
+  ["troli", "cart"],
+  ["pesanan", "order"],
+  ["order", "pesanan"],
+  ["checkout", "order"],
+  // Pengiriman / stok
+  ["pengiriman", "shipping"],
+  ["shipping", "pengiriman"],
+  ["ongkir", "shipping"],
+  ["stok", "stock"],
+  ["stock", "stok"],
+  ["inventaris", "stock"],
+  // Produk / harga
+  ["harga", "price"],
+  ["price", "harga"],
+  ["produk", "product"],
+  ["product", "produk"],
+  // Auth umum
+  ["masuk", "login"],
+  ["login", "masuk"],
+  ["daftar", "signup"],
+  ["logout", "signout"],
+  ["signout", "logout"],
 ]);
 
 export function tokenizeIdentifier(raw: string): string[] {
@@ -63,6 +117,8 @@ export function tokenizeIdentifier(raw: string): string[] {
     }
     const e = EXPLICIT_STEM.get(t);
     if (e && !STOP.has(e)) out.add(e);
+    const d = DOMAIN_SYNONYMS.get(t);
+    if (d && !STOP.has(d)) out.add(d);
   }
   return [...out];
 }

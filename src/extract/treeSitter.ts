@@ -7,6 +7,7 @@ const GRAMMARS: Record<string, string> = {
   typescript: "typescript", javascript: "javascript", python: "python", java: "java",
   go: "go", rust: "rust", php: "php", csharp: "c_sharp", cpp: "cpp",
   c: "c", ruby: "ruby", html: "html", vue: "vue",
+  kotlin: "kotlin", dart: "dart", shell: "bash",
 };
 
 const CLASSES = new Set([
@@ -52,12 +53,17 @@ function identifier(node: Node | null): string | null {
 }
 
 function nameOf(node: Node): string | null {
-  return identifier(node.childForFieldName("name") ?? node.childForFieldName("declarator")) ??
-    children(node).map(identifier).find((name) => name !== null) ?? null;
+  const direct = node.childForFieldName("name") ?? node.childForFieldName("declarator");
+  if (direct) return identifier(direct);
+  for (const child of children(node)) {
+    if (IDENTIFIERS.has(child.type)) return child.text;
+  }
+  return null;
 }
 
 function textOf(node: Node): string {
-  return node.text.trim().split("\n")[0].slice(0, 120);
+  const head = node.text.split(/\{|=>/)[0] ?? node.text;
+  return head.replace(/\s+/g, " ").trim().slice(0, 140);
 }
 
 function lineEnd(node: Node): number {
@@ -91,19 +97,35 @@ function docOf(node: Node, grammar: string): string | null {
 
 function commentAbove(node: Node, parent: Node | null): string | null {
   if (!parent) return null;
-  const siblings = children(parent);
-  const idx = siblings.indexOf(node);
+  let target = node;
+  let container: Node | null = parent;
+  while (
+    container &&
+    (container.type === "export_statement" ||
+      container.type === "export_declaration" ||
+      container.type === "lexical_declaration" ||
+      container.type === "variable_declaration" ||
+      container.type === "decorated_definition")
+  ) {
+    const siblings = children(container);
+    if (!siblings.some((s) => s.id === target.id && siblings.findIndex((x) => x.id === target.id) === 0)) break;
+    target = container;
+    container = container.parent;
+  }
+  if (!container) return null;
+  const siblings = children(container);
+  const idx = siblings.findIndex((s) => s.id === target.id);
   if (idx <= 0) return null;
   const comments: Node[] = [];
   for (let i = idx - 1; i >= 0; i--) {
     const s = siblings[i];
     if (s.type === "comment") comments.unshift(s);
-    else if (s.endPosition.row < node.startPosition.row - 1) break;
+    else if (s.endPosition.row < target.startPosition.row - 1) break;
     else break;
   }
   if (comments.length === 0) return null;
   return comments
-    .map((c) => c.text.replace(/^\s*(\/\*\*?|\/\/|#|--|;|"""|'''|\/\*|\*\/)\s?/gm, "").replace(/\*\/$/gm, "").trim())
+    .map((c) => c.text.replace(/^\s*(\/\*\*?|\/\/|#|--|;|"""|'''|\/\*|\*\/|\*)\s?/gm, "").replace(/\*\/$/gm, "").trim())
     .filter(Boolean)
     .join("\n")
     .slice(0, 500);
@@ -196,13 +218,24 @@ function extractImportItems(node: Node, grammar: string): ExtractedImport[] {
   } else if (grammar === "rust") {
     const text = node.text.replace(/^use\s+/, "").replace(/;$/, "").trim();
     if (text) {
-      const parts = text.split("::");
-      const last = parts[parts.length - 1];
-      if (last && !last.includes("{")) {
-        const local = last.includes(" as ") ? last.split(" as ")[1].trim() : last;
-        const imported = last.includes(" as ") ? last.split(" as ")[0].trim() : last;
-        const mod = parts.slice(0, -1).join("::");
-        items.push({ localName: local, importedName: imported, moduleSpecifier: mod || text });
+      const braceMatch = text.match(/^(.*?)::\{([^}]+)\}$/);
+      if (braceMatch) {
+        const mod = braceMatch[1].trim();
+        const subItems = braceMatch[2].split(",").map((s) => s.trim()).filter(Boolean);
+        for (const item of subItems) {
+          const local = item.includes(" as ") ? item.split(" as ")[1].trim() : item;
+          const imported = item.includes(" as ") ? item.split(" as ")[0].trim() : item;
+          items.push({ localName: local, importedName: imported, moduleSpecifier: mod });
+        }
+      } else {
+        const parts = text.split("::");
+        const last = parts[parts.length - 1];
+        if (last && !last.includes("{")) {
+          const local = last.includes(" as ") ? last.split(" as ")[1].trim() : last;
+          const imported = last.includes(" as ") ? last.split(" as ")[0].trim() : last;
+          const mod = parts.slice(0, -1).join("::");
+          items.push({ localName: local, importedName: imported, moduleSpecifier: mod || text });
+        }
       }
     }
   } else if (grammar === "java") {
@@ -253,6 +286,33 @@ function extractCustomTypes(node: Node | null | undefined): string[] {
   };
   collect(node);
   return found;
+}
+
+function parseJsDocParams(doc: string): string[] {
+  if (!doc || !doc.includes("@param")) return [];
+  const out: string[] = [];
+  const re = /@param\s+(?:\{([^}]+)\}\s*)?([A-Za-z_$][A-Za-z0-9_$]*)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(doc)) !== null) {
+    const type = (m[1] ?? "").split("|")[0]?.trim().replace(/\[\]/g, "");
+    if (type && !PRIMITIVE_TYPES.has(type) && /^[A-Za-z_][A-Za-z0-9_.]*$/.test(type)) {
+      out.push(type);
+    }
+  }
+  return out;
+}
+
+function jsxIdentifiers(node: Node): string[] {
+  const out: string[] = [];
+  const collect = (n: Node) => {
+    if (n.type === "identifier") {
+      const t = n.text.trim();
+      if (t && /^[A-Za-z_][A-Za-z0-9_]*$/.test(t) && !out.includes(t)) out.push(t);
+    }
+    for (const c of children(n)) collect(c);
+  };
+  collect(node);
+  return out;
 }
 
 export function extractSyntaxTree(relPath: string, source: string): FileExtraction {
@@ -312,6 +372,10 @@ export function extractSyntaxTree(relPath: string, source: string): FileExtracti
               for (const iface of extractCustomTypes(child)) {
                 if (iface !== name) relate(name, iface, "IMPLEMENTS", 0.95);
               }
+            } else if (child.type === "interface_body" || child.type === "class_body" || child.type === "object_type") {
+              for (const refType of extractCustomTypes(child)) {
+                if (refType !== name) relate(name, refType, "REFERENCES", 0.85);
+              }
             }
           }
         }
@@ -348,15 +412,42 @@ export function extractSyntaxTree(relPath: string, source: string): FileExtracti
               relate(name, rt, "RETURN_TYPE", 0.9);
             }
           }
+
+          // JSDoc @param {Type} -> PARAM_TYPE (regex di komentar, aman dari crash)
+          try {
+            const doc = commentAbove(node, node.parent) ?? "";
+            for (const t of parseJsDocParams(doc)) {
+              if (t !== name) relate(name, t, "PARAM_TYPE", 0.75);
+            }
+          } catch {
+            // abaikan — jangan crash parse
+          }
+
+          // DI: constructor param -> USES (kelas memakai dependensi injeksi)
+          try {
+            const isCtor = name === "constructor" || node.type.includes("constructor");
+            if (isCtor && owner && owner !== "__file__" && paramListNode) {
+              for (const param of children(paramListNode)) {
+                const typeNode = param.childForFieldName("type") ?? children(param).find((c) => c.type.includes("type"));
+                for (const t of extractCustomTypes(typeNode)) {
+                  if (t !== owner) relate(owner, t, "USES", 0.8);
+                }
+              }
+            }
+          } catch {
+            // abaikan — jangan crash parse
+          }
         }
       } else if (node.type === "variable_declarator" || (node.type === "variable_declaration" && grammar === "go")) {
         const name = nameOf(node);
         if (name) {
           const value = node.childForFieldName("value");
           const callable = value && ["arrow_function", "function_expression", "function", "generator_function"].includes(value.type);
-          add(name, callable ? "function" : "variable", node);
           if (callable) {
-            nextOwner = name;
+            if (owner === "__file__" && !enclosingClass) {
+              add(name, "function", node);
+              nextOwner = name;
+            }
             childScope = new Map<string, string>(scope);
             const paramListNode = value.childForFieldName("parameters") ?? children(value).find((c) => c.type.includes("parameter"));
             if (paramListNode) {
@@ -364,15 +455,16 @@ export function extractSyntaxTree(relPath: string, source: string): FileExtracti
                 const paramName = param.childForFieldName("name")?.text ?? identifier(param.childForFieldName("pattern") ?? param);
                 const typeNode = param.childForFieldName("type") ?? children(param).find((c) => c.type.includes("type"));
                 const types = extractCustomTypes(typeNode);
-                for (const t of types) relate(name, t, "PARAM_TYPE", 0.9);
+                for (const t of types) relate(nextOwner, t, "PARAM_TYPE", 0.9);
                 if (paramName && types.length > 0) childScope.set(paramName, types[0]);
               }
             }
             const retTypeNode = value.childForFieldName("return_type") ?? children(value).find((c) => c.type === "type_annotation");
             if (retTypeNode) {
-              for (const rt of extractCustomTypes(retTypeNode)) relate(name, rt, "RETURN_TYPE", 0.9);
+              for (const rt of extractCustomTypes(retTypeNode)) relate(nextOwner, rt, "RETURN_TYPE", 0.9);
             }
           } else {
+            add(name, "variable", node);
             const typeNode = node.childForFieldName("type") ?? children(node).find((c) => c.type.includes("type"));
             const varTypes = extractCustomTypes(typeNode);
             if (varTypes.length > 0) {
@@ -390,6 +482,15 @@ export function extractSyntaxTree(relPath: string, source: string): FileExtracti
         }
       } else if (node.type === "type_alias_declaration" || node.type === "type_declaration") {
         const name = nameOf(node);
+        if (name) {
+          add(name, "type", node);
+          const valueNode = node.childForFieldName("value") ?? node;
+          for (const refType of extractCustomTypes(valueNode)) {
+            if (refType !== name) relate(name, refType, "REFERENCES", 0.85);
+          }
+        }
+      } else if (node.type === "enum_declaration") {
+        const name = nameOf(node);
         if (name) add(name, "type", node);
       }
 
@@ -406,12 +507,58 @@ export function extractSyntaxTree(relPath: string, source: string): FileExtracti
         }
       }
       if (node.type === "export_statement" || node.type === "export_declaration") {
-        const target = stringValue(node);
-        if (target) relate("__file__", `export*:${target}`, "EXPORTS", 0.7);
-        else {
-          const declaration = children(node).find((child) => CLASSES.has(child.type) || FUNCTIONS.has(child.type) || child.type.includes("declaration"));
-          const name = declaration ? nameOf(declaration) : identifier(children(node).find((child) => IDENTIFIERS.has(child.type)) ?? null);
-          if (name) relate("__file__", name, "EXPORTS");
+        const sourceNode = node.childForFieldName("source");
+        const target = sourceNode ? stringValue(sourceNode) : null;
+        if (target) {
+          const clause = children(node).find((c) => c.type === "export_clause");
+          if (clause) {
+            for (const spec of children(clause)) {
+              if (spec.type === "export_specifier") {
+                const orig = spec.childForFieldName("name")?.text ?? identifier(spec);
+                const exported = spec.childForFieldName("alias")?.text ?? orig;
+                if (orig) {
+                  imports.push({ localName: exported ?? orig, importedName: orig, moduleSpecifier: target });
+                  relate("__file__", exported ?? orig, "EXPORTS");
+                  relate("__file__", orig, "REFERENCES", 0.9);
+                }
+              }
+            }
+          } else {
+            relate("__file__", `export*:${target}`, "EXPORTS", 0.7);
+          }
+        } else {
+          const clause = children(node).find((c) => c.type === "export_clause");
+          if (clause) {
+            for (const spec of children(clause)) {
+              if (spec.type === "export_specifier") {
+                const orig = spec.childForFieldName("name")?.text ?? identifier(spec);
+                if (orig) relate("__file__", orig, "EXPORTS");
+              }
+            }
+          } else {
+            const declaration = children(node).find(
+              (child) =>
+                CLASSES.has(child.type) ||
+                FUNCTIONS.has(child.type) ||
+                child.type.includes("declaration")
+            );
+            if (declaration) {
+              if (declaration.type === "lexical_declaration" || declaration.type === "variable_declaration") {
+                for (const sub of children(declaration)) {
+                  if (sub.type === "variable_declarator") {
+                    const vName = nameOf(sub);
+                    if (vName) relate("__file__", vName, "EXPORTS");
+                  }
+                }
+              } else {
+                const name = nameOf(declaration);
+                if (name) relate("__file__", name, "EXPORTS");
+              }
+            } else {
+              const name = identifier(children(node).find((child) => IDENTIFIERS.has(child.type)) ?? null);
+              if (name) relate("__file__", name, "EXPORTS");
+            }
+          }
         }
       }
       if (CALLS.has(node.type)) {
@@ -447,12 +594,59 @@ export function extractSyntaxTree(relPath: string, source: string): FileExtracti
             ...(receiverType ? { receiverType } : {}),
           });
         }
+        const argsNode = node.childForFieldName("arguments");
+        if (argsNode) {
+          for (const arg of children(argsNode)) {
+            if (arg.type === "identifier" && arg.text !== owner) {
+              relate(owner, arg.text, "REFERENCES", 0.85);
+            }
+          }
+        }
+      }
+      if (node.type === "array" || node.type === "object" || node.type === "return_statement" || node.type === "binary_expression" || node.type === "ternary_expression" || node.type === "spread_element") {
+        for (const child of children(node)) {
+          if (child.type === "identifier" && child.text !== owner) {
+            relate(owner, child.text, "REFERENCES", 0.85);
+          } else if (child.type === "shorthand_property_identifier" && child.text !== owner) {
+            relate(owner, child.text, "REFERENCES", 0.85);
+          } else if (child.type === "pair") {
+            const val = child.childForFieldName("value");
+            if (val && val.type === "identifier" && val.text !== owner) {
+              relate(owner, val.text, "REFERENCES", 0.85);
+            }
+          }
+        }
       }
       if ((grammar === "html" || grammar === "vue") && node.type === "attribute") {
         const parts = children(node);
         if (parts[0]?.text === "id" && parts[1]) {
           const value = stringValue(parts[1]);
           if (value) add(value, "element", node);
+        }
+      }
+      // JSX: <UserCard user={user} prop={x}> -> REFERENCES tambahan
+      if (
+        node.type === "jsx_element" ||
+        node.type === "jsx_self_closing_element" ||
+        node.type === "jsx_opening_element"
+      ) {
+        try {
+          const tag = node.childForFieldName("name") ?? children(node).find((c) => c.type === "identifier");
+          const tagName = tag?.text ?? "";
+          if (tagName && /^[A-Z]/.test(tagName) && tagName !== owner) {
+            relate(owner, tagName, "REFERENCES", 0.85);
+          }
+          for (const child of children(node)) {
+            if (child.type === "jsx_attribute") {
+              for (const id of jsxIdentifiers(child)) {
+                if (id !== owner && id !== tagName) {
+                  relate(owner, id, "REFERENCES", 0.85);
+                }
+              }
+            }
+          }
+        } catch {
+          // abaikan — jangan crash parse
         }
       }
       for (const child of children(node)) visit(child, nextOwner, inClass, childScope);

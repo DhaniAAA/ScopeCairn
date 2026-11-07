@@ -8,6 +8,7 @@ export function benchmarkReport(
   gitAvailable: boolean
 ): string {
   const pct = (x: number): string => `${(x * 100).toFixed(0)}%`;
+  const frac = (x: number): string => x.toFixed(3);
   const escCell = (s: string): string => s.replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
   const lines: string[] = [
     `# ScopeCairn Benchmark`,
@@ -21,17 +22,19 @@ export function benchmarkReport(
     `|---|---|---|---|`,
     `| Retrieval recall (rata-rata, konteks penuh) | ${pct(summary.avgRecall)} | ditetapkan awal ≥ 70% | ${summary.avgRecall >= 0.7 ? "✓" : "✗"} |`,
     `| Task recall ≥ 50% | ${pct(summary.recallAtThreshold)} | — | — |`,
+    `| nDCG (rata-rata) | ${frac(summary.avgNdcg)} | — | — |`,
+    `| MRR (rata-rata) | ${frac(summary.avgMrr)} | — | — |`,
     `| Irrelevant file ratio (bacaan pertama HIGH) | ${pct(summary.avgIrrelevant)} | < 20% | ${summary.avgIrrelevant < 0.2 ? "✓" : "✗"} |`,
     `| Context reduction (estimasi) | ${pct(summary.avgReduction)} | ≥ 30% | ${summary.avgReduction >= 0.3 ? "✓" : "✗"} |`,
     ``,
     `## Per task`,
     ``,
-    `| Task | Recall | Irrelevant | Ditemukan | Bacaan pertama |`,
-    `|---|---|---|---|---|`,
+    `| Task | Recall | nDCG | MRR | Irrelevant | Ditemukan | Bacaan pertama |`,
+    `|---|---|---|---|---|---|---|`,
   ];
   for (const t of summary.tasks) {
     lines.push(
-      `| ${escCell(t.task)} | ${pct(t.recall)} | ${pct(t.irrelevantRatio)} | ${escCell(t.hits.join(", ") || "-")} | ${escCell(t.highFiles.join(", ") || "-")} |`
+      `| ${escCell(t.task)} | ${pct(t.recall)} | ${frac(t.ndcg)} | ${frac(t.mrr)} | ${pct(t.irrelevantRatio)} | ${escCell(t.hits.join(", ") || "-")} | ${escCell(t.highFiles.join(", ") || "-")} |`
     );
   }
   if (tune) {
@@ -40,8 +43,8 @@ export function benchmarkReport(
       ``,
       `## Kalibrasi bobot (${tune.tried} kombinasi)`,
       ``,
-      `Baseline: seed=${tune.baseline.weights.wSeed} prox=${tune.baseline.weights.wProximity} cent=${tune.baseline.weights.wCentrality} → recall ${pct(tune.baseline.avgRecall)}, irrelevant ${pct(tune.baseline.avgIrrelevant)}`,
-      `Terbaik: seed=${best.weights.wSeed} prox=${best.weights.wProximity} cent=${best.weights.wCentrality} → recall ${pct(best.avgRecall)}, irrelevant ${pct(best.avgIrrelevant)}`,
+      `Baseline: seed=${tune.baseline.weights.wSeed} prox=${tune.baseline.weights.wProximity} cent=${tune.baseline.weights.wCentrality} → recall ${pct(tune.baseline.avgRecall)}, irrelevant ${pct(tune.baseline.avgIrrelevant)}, nDCG ${frac(tune.baseline.avgNdcg)}, MRR ${frac(tune.baseline.avgMrr)}`,
+      `Terbaik: seed=${best.weights.wSeed} prox=${best.weights.wProximity} cent=${best.weights.wCentrality} → recall ${pct(best.avgRecall)}, irrelevant ${pct(best.avgIrrelevant)}, nDCG ${frac(best.avgNdcg)}, MRR ${frac(best.avgMrr)}`,
       tune.best.avgRecall - tune.baseline.avgRecall > 0.05
         ? `Rekomendasi: terapkan ke \`.scopecairn/config.yml\` (gain > 5%).`
         : `Rekomendasi: pertahankan default (gain ≤ 5% — hindari overfit ke 12 task).`

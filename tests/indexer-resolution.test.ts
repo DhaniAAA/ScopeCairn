@@ -76,3 +76,72 @@ test("cross-file receiver call menghubungkan namespace/pkg call ke modul target"
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
   }
 });
+
+test("barrel file re-export menghubungkan import ke modul target asal", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "sc-barrel-"));
+  const db = openDb(tmpDir);
+  try {
+    const f1 = db.prepare(`INSERT INTO files(path, language, hash, size) VALUES ('src/math.ts', 'typescript', 'h1', 100)`).run();
+    const f2 = db.prepare(`INSERT INTO files(path, language, hash, size) VALUES ('src/index.ts', 'typescript', 'h2', 100)`).run();
+    const f3 = db.prepare(`INSERT INTO files(path, language, hash, size) VALUES ('src/app.ts', 'typescript', 'h3', 100)`).run();
+    const fileIdMath = Number(f1.lastInsertRowid);
+    const fileIdIndex = Number(f2.lastInsertRowid);
+    const fileIdApp = Number(f3.lastInsertRowid);
+
+    const mathContent = `export function add(a: number, b: number) { return a + b; }`;
+    const mathExt = indexFileSymbols(db, fileIdMath, "src/math.ts", mathContent);
+    indexFileRelations(db, fileIdMath, "src/math.ts", mathExt.extraction, mathExt.fileSym);
+
+    const indexContent = `export * from "./math";`;
+    const indexExt = indexFileSymbols(db, fileIdIndex, "src/index.ts", indexContent);
+    indexFileRelations(db, fileIdIndex, "src/index.ts", indexExt.extraction, indexExt.fileSym);
+
+    const appContent = `import { add } from "./index";\nexport function run() { return add(1, 2); }`;
+    const appExt = indexFileSymbols(db, fileIdApp, "src/app.ts", appContent);
+    indexFileRelations(db, fileIdApp, "src/app.ts", appExt.extraction, appExt.fileSym);
+
+    const mathAddSym = db.prepare(`SELECT id FROM symbols WHERE file_id = ? AND name = 'add'`).get(fileIdMath) as { id: number };
+    const runSym = db.prepare(`SELECT id FROM symbols WHERE file_id = ? AND name = 'run'`).get(fileIdApp) as { id: number };
+
+    const callRel = db.prepare(`SELECT target_id, confidence, evidence FROM relationships WHERE source_id = ? AND relationship_type = 'CALLS'`).get(runSym.id) as { target_id: number; confidence: number; evidence: string } | undefined;
+
+    assert.ok(callRel, "Relasi CALLS melalui barrel re-export harus terbentuk");
+    assert.equal(callRel.target_id, mathAddSym.id, "CALLS harus terhubung ke math.ts add");
+    assert.equal(callRel.evidence, "EXTRACTED");
+  } finally {
+    try { db.close(); } catch {}
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+  }
+});
+
+test("path alias @/ menghubungkan import ke file src/", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "sc-alias-"));
+  const db = openDb(tmpDir);
+  try {
+    const f1 = db.prepare(`INSERT INTO files(path, language, hash, size) VALUES ('src/math.ts', 'typescript', 'h1', 100)`).run();
+    const f2 = db.prepare(`INSERT INTO files(path, language, hash, size) VALUES ('src/client.ts', 'typescript', 'h2', 100)`).run();
+    const fileIdMath = Number(f1.lastInsertRowid);
+    const fileIdClient = Number(f2.lastInsertRowid);
+
+    const mathContent = `export function add(a: number, b: number) { return a + b; }`;
+    const mathExt = indexFileSymbols(db, fileIdMath, "src/math.ts", mathContent);
+    indexFileRelations(db, fileIdMath, "src/math.ts", mathExt.extraction, mathExt.fileSym);
+
+    const clientContent = `import { add } from "@/math";\nexport function compute() { return add(3, 4); }`;
+    const clientExt = indexFileSymbols(db, fileIdClient, "src/client.ts", clientContent);
+    indexFileRelations(db, fileIdClient, "src/client.ts", clientExt.extraction, clientExt.fileSym);
+
+    const mathAddSym = db.prepare(`SELECT id FROM symbols WHERE file_id = ? AND name = 'add'`).get(fileIdMath) as { id: number };
+    const computeSym = db.prepare(`SELECT id FROM symbols WHERE file_id = ? AND name = 'compute'`).get(fileIdClient) as { id: number };
+
+    const callRel = db.prepare(`SELECT target_id, confidence, evidence FROM relationships WHERE source_id = ? AND relationship_type = 'CALLS'`).get(computeSym.id) as { target_id: number; confidence: number; evidence: string } | undefined;
+
+    assert.ok(callRel, "Relasi CALLS dengan path alias @/ harus terbentuk");
+    assert.equal(callRel.target_id, mathAddSym.id, "CALLS harus mengarah ke src/math.ts add");
+    assert.equal(callRel.evidence, "EXTRACTED");
+  } finally {
+    try { db.close(); } catch {}
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+  }
+});
+

@@ -148,15 +148,17 @@ export function findShortestPath(
   chain.reverse();
   const info = new Map<number, GraphNode>();
   try {
+    const placeholders = chain.map(() => "?").join(",");
     const rows = db
       .prepare(
         `SELECT s.id, s.name, s.type, f.path AS file FROM symbols s
-         JOIN files f ON f.id = s.file_id`
+         JOIN files f ON f.id = s.file_id
+         WHERE s.id IN (${placeholders})`
       )
-      .all() as Record<string, unknown>[];
+      .all(...chain) as Record<string, unknown>[];
     for (const r of rows) {
       const n = asNode(r);
-      if (chain.includes(n.id)) info.set(n.id, n);
+      info.set(n.id, n);
     }
   } catch {
     return null;

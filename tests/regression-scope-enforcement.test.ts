@@ -341,3 +341,49 @@ test("semua template skill agent memerintahkan verify --task", () => {
     );
   }
 });
+
+test("loadPersistedScope mencocokkan task secara kanonikal meski ada perbedaan tanda baca atau kapitalisasi", () => {
+  const repo = initGitRepo();
+  try {
+    const db = openDb(repo);
+    try {
+      db.prepare(`INSERT INTO tasks(id, description, complexity) VALUES (1, 'fix user refund bug', 'COMPLEX')`).run();
+      persistScope(db, 1, { required: ["src/refund.ts"], optional: [], protected: [] });
+
+      // Coba cari dengan huruf kapital, trailing space, dan tanda baca titik
+      const matched = loadPersistedScope(db, "Fix User Refund Bug.");
+      assert.ok(matched, "scope harus ditemukan melalui normalisasi kanonikal");
+      assert.equal(matched?.taskId, 1);
+      assert.ok(matched?.scope.required.includes("src/refund.ts"));
+    } finally {
+      db.close();
+    }
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("verify menegakkan strict mode secara default dan gagal bila ada file out-of-scope", async () => {
+  const repo = initGitRepo();
+  try {
+    writeRepoFiles(repo);
+    await scanRepository(repo);
+
+    fs.writeFileSync(
+      path.join(repo, "src", "unrelated.ts"),
+      `export function unrelatedHelper(): string {\n  return "changed";\n}\n`
+    );
+
+    // Default verify (tanpa flag --strict eksplisit) harus FAIL (strict by default)
+    const resDefault = await runVerify(repo, { task: "refund charge handler", noRefresh: true });
+    assert.equal(resDefault.ok, false, "verify harus gagal secara default saat ada file di luar scope");
+
+    // Bila --no-strict (strict: false) diberikan, verifikasi tetap lolos dengan warning
+    const resLenient = await runVerify(repo, { task: "refund charge handler", strict: false, noRefresh: true });
+    assert.equal(resLenient.ok, true, "verify dengan strict: false harus lolos dengan warning");
+    assert.ok(resLenient.scopeViolations.length > 0);
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+

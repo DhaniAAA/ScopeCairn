@@ -15,7 +15,7 @@ export async function cmdWatch(
   console.log(`[Watch] ScopeCairn watching for changes in: ${repoRoot}`);
   console.log(`[Watch] Debounce: ${debounceMs}ms. Press Ctrl+C to stop.\n`);
 
-  const ignoreRules = loadIgnoreRules(repoRoot);
+  let ignoreRules = loadIgnoreRules(repoRoot);
   let timer: NodeJS.Timeout | null = null;
   const pendingFiles = new Set<string>();
   let isRefreshing = false;
@@ -53,15 +53,23 @@ export async function cmdWatch(
 
     const relPosix = filename.replace(/\\/g, "/");
 
-    // Abaikan direktori internal & artefak
+    // Abaikan direktori internal & artefak build
     if (
       relPosix.startsWith(".git/") ||
       relPosix.startsWith(".scopecairn/") ||
       relPosix.startsWith("node_modules/") ||
       relPosix.startsWith("dist/") ||
-      relPosix.startsWith("build/")
+      relPosix.startsWith("build/") ||
+      relPosix.startsWith("target/") ||
+      relPosix.startsWith("coverage/") ||
+      relPosix.startsWith(".next/")
     ) {
       return;
+    }
+
+    // .gitignore berubah → muat ulang aturan agar penghormatan ignore selalu segar.
+    if (relPosix === ".gitignore" || relPosix === ".scopecairnignore") {
+      ignoreRules = loadIgnoreRules(repoRoot);
     }
 
     if (isIgnored(relPosix, ignoreRules)) {

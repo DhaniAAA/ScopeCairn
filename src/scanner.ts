@@ -16,6 +16,9 @@ import { logError } from "./log.js";
 import { writeGraphMdIfChanged } from "./graph/export.js";
 import { buildVisualModel, renderHtml, GRAPH_HTML_NAME } from "./graph/visual.js";
 import { writeArchaeologyIfAbsent } from "./archaeology.js";
+import { ensureCycles } from "./graph/cycles.js";
+import { changedFilesVsHead } from "./retrieval/gitChanged.js";
+import { detectLsp, type LspStatus } from "./extract/lsp.js";
 
 export interface ScanStats {
   repoRoot: string;
@@ -32,6 +35,8 @@ export interface ScanStats {
   unchanged: number;
   removed: number;
   durationMs: number;
+  /** Hanya terisi bila `--lsp` diberikan (deteksi best-effort, tak wajib). */
+  lsp?: LspStatus;
 }
 
 function toPosixRel(repoRoot: string, abs: string): string {
@@ -67,7 +72,17 @@ function walk(
   }
 }
 
-export async function scanRepository(repoRoot: string): Promise<ScanStats> {
+export interface ScanRepositoryOptions {
+  /** Bila true, hanya file yang berubah menurut git (+ file baru belum terindeks) yang diproses. */
+  changedOnly?: boolean;
+  /** Bila true, deteksi LSP opsional (tsserver/gopls/pyright) best-effort. Default: off. */
+  lsp?: boolean;
+}
+
+export async function scanRepository(
+  repoRoot: string,
+  opts?: ScanRepositoryOptions
+): Promise<ScanStats> {
   const started = Date.now();
   const rules = loadIgnoreRules(repoRoot);
   const db = openDb(repoRoot);
@@ -78,9 +93,40 @@ export async function scanRepository(repoRoot: string): Promise<ScanStats> {
     // dan handle SQLite tidak bocor (di Windowshandle yang bocor menahan
     // scopecairn.db-wal).
     ensureDefaultFiles(repoRoot);
+    const changedOnly = opts?.changedOnly === true;
+    let changedSet: Set<string> | null = null;
+    if (changedOnly) {
+      try {
+        changedSet = new Set(
+          changedFilesVsHead(repoRoot).map((p) => p.replace(/\\/g, "/"))
+        );
+      } catch {
+        changedSet = new Set<string>();
+      }
+    }
     const allAbs: string[] = [];
     walk(repoRoot, repoRoot, rules, allAbs);
-    await prepareTreeSitter(allAbs
+    let scanAbs = allAbs;
+    if (changedOnly && changedSet) {
+      const known = new Set<string>();
+      try {
+        for (const r of db.prepare(`SELECT path FROM files`).all() as { path: string }[]) {
+          known.add(r.path);
+        }
+      } catch {
+        // DB kosong / skema lama — fallback ke semua file bila fingerprint kosong.
+      }
+      const dbEmpty = known.size === 0;
+      if (!dbEmpty) {
+        // Hanya proses file git-dirty + file yang belum ada di DB (aman untuk
+        // scan pertama pasca-commit); sisanya di-skip tanpa merusak seenPaths.
+        scanAbs = allAbs.filter((abs) => {
+          const rel = toPosixRel(repoRoot, abs);
+          return changedSet!.has(rel) || !known.has(rel);
+        });
+      }
+    }
+    await prepareTreeSitter(scanAbs
       .filter((abs) => isSourceFile(abs))
       .map((abs) => grammarForPath(abs))
       .filter((name): name is string => name !== null));
@@ -136,17 +182,21 @@ export async function scanRepository(repoRoot: string): Promise<ScanStats> {
       ftsCount = 0;
     }
     const backfill = !backfillDone && (symbolCount === 0 || ftsCount === 0);
-    const extractorVersion = "tree-sitter-wasms-0.1.13-v1";
+    const extractorVersion = "tree-sitter-wasms-0.1.13-v5";
     const indexedVersion = db.prepare(`SELECT value FROM meta WHERE key = 'extractor_version'`)
       .get() as { value: string } | undefined;
     const parserChanged = indexedVersion?.value !== extractorVersion;
+    // Backfill/parser-change butuh re-extract penuh — batalkan filter changedOnly.
+    if ((backfill || parserChanged) && scanAbs.length < allAbs.length) {
+      scanAbs = allAbs;
+    }
 
     // Two-phase indexing: phase 1 inserts symbols for all changed files,
     // phase 2 resolves relations — cross-file edges are order-independent.
     const pending: { fileId: number; rel: string; content: string }[] = [];
-    const metaChanged: { fileId: number; rel: string }[] = [];
+    const metaChanged: { fileId: number; rel: string; content: string }[] = [];
 
-    for (const abs of allAbs) {
+    for (const abs of scanAbs) {
       const rel = toPosixRel(repoRoot, abs);
       if (isIgnored(rel, rules)) continue;
       totalFilesSeen++;
@@ -174,7 +224,7 @@ export async function scanRepository(repoRoot: string): Promise<ScanStats> {
           pending.push({ fileId: Number(r.lastInsertRowid), rel, content: buf.toString("utf8") });
         } else {
           indexMetaFile(db, Number(r.lastInsertRowid), rel);
-          metaChanged.push({ fileId: Number(r.lastInsertRowid), rel });
+          metaChanged.push({ fileId: Number(r.lastInsertRowid), rel, content: buf.toString("utf8") });
         }
         inserted++;
       } else if (row.hash !== hash || backfill || parserChanged) {
@@ -183,7 +233,7 @@ export async function scanRepository(repoRoot: string): Promise<ScanStats> {
           pending.push({ fileId: row.id, rel, content: buf.toString("utf8") });
         } else {
           indexMetaFile(db, row.id, rel);
-          metaChanged.push({ fileId: row.id, rel });
+          metaChanged.push({ fileId: row.id, rel, content: buf.toString("utf8") });
         }
         updated++;
       } else {
@@ -191,7 +241,8 @@ export async function scanRepository(repoRoot: string): Promise<ScanStats> {
       }
     }
 
-    // Remove stale rows (deleted / newly ignored files).
+    // Remove stale rows (deleted / newly ignored files). Mode changedOnly
+    // hanya boleh menghapus path git-dirty yang kini hilang dari disk.
     const existing = db
       .prepare(`SELECT path FROM files`)
       .all() as { path: string }[];
@@ -199,6 +250,7 @@ export async function scanRepository(repoRoot: string): Promise<ScanStats> {
     let removed = 0;
     for (const r of existing) {
       if (!seenPaths.has(r.path)) {
+        if (changedSet && !changedSet.has(r.path)) continue;
         delStmt.run(r.path);
         removed++;
       }
@@ -218,9 +270,12 @@ export async function scanRepository(repoRoot: string): Promise<ScanStats> {
     // source (app/, pages/) maupun meta (schema.prisma).
     const adapterChanged = [
       ...pending.map((p) => ({ fileId: p.fileId, rel: p.rel })),
-      ...metaChanged,
+      ...metaChanged.map((p) => ({ fileId: p.fileId, rel: p.rel })),
     ];
-    const adapterRun = runAdapters(db, repoRoot, adapterChanged);
+    const contentMap = new Map<number, string>();
+    for (const p of pending) contentMap.set(p.fileId, p.content);
+    for (const p of metaChanged) contentMap.set(p.fileId, p.content);
+    const adapterRun = runAdapters(db, repoRoot, adapterChanged, contentMap);
 
     db.prepare(
       `INSERT INTO meta(key, value) VALUES ('last_scan', datetime('now'))
@@ -234,9 +289,31 @@ export async function scanRepository(repoRoot: string): Promise<ScanStats> {
       `INSERT INTO meta(key, value) VALUES ('extractor_version', ?)
        ON CONFLICT(key) DO UPDATE SET value = excluded.value`
     ).run(extractorVersion);
+    const delta: Record<string, number> = {
+      inserted,
+      updated,
+      unchanged,
+      removed,
+      sourceFiles,
+      metaFiles,
+      durationMs: Date.now() - started,
+    };
+    try {
+      db.prepare(
+        `INSERT INTO meta(key, value) VALUES ('last_scan_delta', ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+      ).run(JSON.stringify(delta));
+    } catch {
+      // delta bersifat opsional — abaikan kegagalan serialisasi
+    }
 
     linkTests(db);
     cleanupIndex(db);
+    try {
+      ensureCycles(db);
+    } catch (err) {
+      logError("cycles", err, repoRoot);
+    }
 
     // Cache fan-in untuk ranking retrieval. Satu lintasan GROUP BY di akhir
     // scan (bukan di setiap retrieve()). Diletakkan SEBELUM COMMIT supaya
@@ -304,6 +381,17 @@ export async function scanRepository(repoRoot: string): Promise<ScanStats> {
       db.prepare(`SELECT COUNT(*) AS n FROM relationships`).get() as { n: number }
     ).n;
 
+    // LSP opsional (default off): hanya deteksi ketersediaan biner, tak
+    // mengubah ekstraksi Tree-sitter dan tak pernah menggagalkan scan.
+    let lsp: LspStatus | undefined;
+    if (opts?.lsp) {
+      try {
+        lsp = detectLsp();
+      } catch {
+        lsp = undefined;
+      }
+    }
+
     return {
       repoRoot,
       totalFilesSeen,
@@ -319,6 +407,7 @@ export async function scanRepository(repoRoot: string): Promise<ScanStats> {
       unchanged,
       removed,
       durationMs: Date.now() - started,
+      ...(lsp ? { lsp } : {}),
     };
   } finally {
     if (inTx) {

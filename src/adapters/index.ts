@@ -7,6 +7,11 @@ import { prismaAdapter } from "./prisma.js";
 import { nextjsAdapter, derivePrismaQueries } from "./nextjs.js";
 import { drizzleAdapter, deriveDrizzleQueries } from "./drizzle.js";
 import { expressAdapter } from "./express.js";
+import { fastifyAdapter } from "./fastify.js";
+import { railsAdapter } from "./rails.js";
+import { laravelAdapter } from "./laravel.js";
+import { springAdapter } from "./spring.js";
+import { golangAdapter } from "./golang.js";
 import { fastapiAdapter } from "./fastapi.js";
 import {
   sqlalchemyAdapter,
@@ -27,10 +32,15 @@ const ADAPTERS: FrameworkAdapter[] = [
   sqlalchemyAdapter,
   nextjsAdapter,
   expressAdapter,
+  fastifyAdapter,
   fastapiAdapter,
   nestjsAdapter,
   djangoAdapter,
   vueAdapter,
+  railsAdapter,
+  laravelAdapter,
+  springAdapter,
+  golangAdapter,
 ];
 
 export function detectAdapters(files: string[], repoRoot?: string): FrameworkAdapter[] {
@@ -46,11 +56,16 @@ export function detectAdapters(files: string[], repoRoot?: string): FrameworkAda
   });
 }
 
-/** Jalankan adapter terdeteksi atas file yang berubah. Kembalikan ringkasan. */
+/**
+ * Jalankan adapter terdeteksi atas file yang berubah. Kembalikan ringkasan.
+ * `contentByFileId` (opsional, dari scanner yang sudah membaca file) diutamakan
+ * agar file yang baru dibaca tidak dibaca ulang dari disk.
+ */
 export function runAdapters(
   db: DatabaseSync,
   repoRoot: string,
-  changed: { fileId: number; rel: string }[]
+  changed: { fileId: number; rel: string }[],
+  contentByFileId?: Map<number, string>
 ): { adapters: string[]; symbols: number; relations: number } {
   const allFiles = (
     db.prepare(`SELECT path FROM files`).all() as { path: string }[]
@@ -61,17 +76,21 @@ export function runAdapters(
   let symbols = 0;
   let relations = 0;
   const touched = new Set<number>();
+  const readContent = (fileId: number, rel: string): string | null => {
+    const cached = contentByFileId?.get(fileId);
+    if (cached !== undefined) return cached;
+    try {
+      return fs.readFileSync(path.join(repoRoot, ...rel.split("/")), "utf8");
+    } catch {
+      return null;
+    }
+  };
   for (const adapter of active) {
     const inputs: AdapterFile[] = [];
     for (const c of changed) {
       if (!adapter.relevant(c.rel)) continue;
-      const abs = path.join(repoRoot, ...c.rel.split("/"));
-      let content: string;
-      try {
-        content = fs.readFileSync(abs, "utf8");
-      } catch {
-        continue;
-      }
+      const content = readContent(c.fileId, c.rel);
+      if (content === null) continue;
       inputs.push({ fileId: c.fileId, rel: c.rel, content });
     }
     if (inputs.length === 0) continue;
@@ -97,10 +116,12 @@ export function runAdapters(
       }
     }
   }
-  // QUERIES anti-basi: satu pass terpadu atas SEMUA file relevan.
-  // Per-file edge QUERIES dihapus lalu diturunkan ulang dari SEMUA
-  // parser query aktif. Refresh per-adapter akan menghapus edge
-  // adapter lain (mis. Prisma + Drizzle dalam satu repo JS).
+  // QUERIES anti-basi: satu pass terpadu. Bila file model/schema berubah,
+  // target baru bisa muncul → pass global atas SEMUA file relevan; bila tidak,
+  // cukup file yang berubah (file tak berubah tidak di-reparse).
+  // Per-file edge QUERIES dihapus lalu diturunkan ulang dari parser query
+  // aktif. Refresh per-adapter akan menghapus edge adapter lain (mis. Prisma +
+  // Drizzle dalam satu repo JS).
   const derivers: {
     relevant: (rel: string) => boolean;
     derive: (
@@ -121,11 +142,43 @@ export function runAdapters(
       derive: deriveSqlAlchemyQueries,
     });
   }
+  const looksLikeModel = (rel: string, content?: string): boolean => {
+    if (rel.endsWith("schema.prisma")) return true;
+    if (/(^|\/)drizzle\.config\./.test(rel) || /(^|\/)drizzle\//.test(rel)) return true;
+    if (/(^|\/)(db|drizzle)\/.*schema.*/.test(rel)) return true;
+    if (/(^|\/)models\.py$/.test(rel) || /(^|\/)models\//.test(rel)) return true;
+    if (content) {
+      if (content.includes("__tablename__")) return true;
+      if (
+        content.includes("pgTable(") ||
+        content.includes("sqliteTable(") ||
+        content.includes("mysqlTable(")
+      )
+        return true;
+    }
+    return false;
+  };
+  const looksLikeRoute = (rel: string, content?: string): boolean => {
+    if (/(^|\/)app\//.test(rel) || /(^|\/)pages\//.test(rel)) return true;
+    if (/(^|\/)routes?\//.test(rel)) return true;
+    if (!content) return false;
+    return (
+      content.includes(".get(") && content.includes("/api") ||
+      content.includes("APIRouter") ||
+      content.includes("@Controller") ||
+      content.includes("@app.") ||
+      content.includes("@router.")
+    );
+  };
   if (derivers.length > 0) {
     try {
-      const all = db
-        .prepare(`SELECT id, path FROM files`)
-        .all() as { id: number; path: string }[];
+      const schemaChanged = changed.some((c) =>
+        contentByFileId ? looksLikeModel(c.rel, contentByFileId.get(c.fileId))
+        : prismaAdapter.relevant(c.rel) || drizzleAdapter.relevant(c.rel) || sqlalchemyAdapter.relevant(c.rel)
+      );
+      const all: { id: number; path: string }[] = schemaChanged
+        ? (db.prepare(`SELECT id, path FROM files`).all() as { id: number; path: string }[])
+        : changed.map((c) => ({ id: c.fileId, path: c.rel }));
       const del = db.prepare(
         `DELETE FROM relationships WHERE relationship_type = 'QUERIES' AND source_id IN (SELECT id FROM symbols WHERE file_id = ?)`
       );
@@ -135,12 +188,8 @@ export function runAdapters(
       );
       for (const r of all) {
         if (!derivers.some((d) => d.relevant(r.path))) continue;
-        let content: string;
-        try {
-          content = fs.readFileSync(path.join(repoRoot, ...r.path.split("/")), "utf8");
-        } catch {
-          continue;
-        }
+        const content = readContent(r.id, r.path);
+        if (content === null) continue;
         del.run(r.id);
         for (const d of derivers) {
           for (const e of d.derive(db, r.id, content)) {
@@ -153,10 +202,17 @@ export function runAdapters(
       logError("adapters", err, repoRoot);
     }
   }
-  // CALLS_API lintas batas: post-pass atas SEMUA file JS/TS, seperti QUERIES.
-  // Route baru langsung me-resolve call yang tertunda tanpa rebuild.
+  // CALLS_API lintas batas: post-pass atas file JS/TS yang berubah; bila file
+  // route berubah (target baru) → pass global agar call tertunda me-resolve.
   try {
-    const all = db.prepare(`SELECT id, path FROM files`).all() as { id: number; path: string }[];
+    const routeChanged = changed.some((c) =>
+      contentByFileId
+        ? looksLikeRoute(c.rel, contentByFileId.get(c.fileId))
+        : active.some((a) => a.relevant(c.rel))
+    );
+    const all: { id: number; path: string }[] = routeChanged
+      ? (db.prepare(`SELECT id, path FROM files`).all() as { id: number; path: string }[])
+      : changed.map((c) => ({ id: c.fileId, path: c.rel }));
     const hasClient = all.some((r) => apiCallsRelevant(r.path));
     if (hasClient) {
       const delApi = db.prepare(
@@ -168,12 +224,8 @@ export function runAdapters(
       );
       for (const r of all) {
         if (!apiCallsRelevant(r.path)) continue;
-        let content: string;
-        try {
-          content = fs.readFileSync(path.join(repoRoot, ...r.path.split("/")), "utf8");
-        } catch {
-          continue;
-        }
+        const content = readContent(r.id, r.path);
+        if (content === null) continue;
         try {
           delApi.run(r.id);
         } catch (err) {

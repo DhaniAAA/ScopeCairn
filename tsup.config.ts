@@ -5,7 +5,7 @@ import { defineConfig } from "tsup";
 
 const require = createRequire(import.meta.url);
 const source = path.join(path.dirname(require.resolve("tree-sitter-wasms/package.json")), "out");
-const grammars = ["typescript", "tsx", "javascript", "python", "java", "go", "rust", "php", "c_sharp", "cpp", "c", "ruby", "html", "vue"];
+const grammars = ["typescript", "tsx", "javascript", "python", "java", "go", "rust", "php", "c_sharp", "cpp", "c", "ruby", "html", "vue", "kotlin", "dart", "bash"];
 
 export default defineConfig({
   entry: ["src/cli.ts"],

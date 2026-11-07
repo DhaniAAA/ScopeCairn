@@ -219,15 +219,16 @@ export function refreshClusters(db: DatabaseSync): { count: number; modularity: 
   } catch {
     // ignore
   }
-  // Nama cluster dari direktori teratas terbanyak anggotanya.
+  // Nama cluster dari direktori teratas terbanyak anggotanya (satu query batch).
   const names = new Map<number, string>();
   try {
     const byCluster = new Map<number, Map<string, number>>();
+    const pathRows = db
+      .prepare(`SELECT s.id AS nid, f.path AS p FROM symbols s JOIN files f ON f.id = s.file_id`)
+      .all() as { nid: number; p: string }[];
+    const pathByNode = new Map<number, string>(pathRows.map((r) => [r.nid, r.p]));
     for (const [nodeId, cid] of assignment) {
-      const r = db
-        .prepare(`SELECT f.path AS p FROM symbols s JOIN files f ON f.id = s.file_id WHERE s.id = ?`)
-        .get(nodeId) as { p: string } | undefined;
-      const top = (r?.p ?? "").split("/")[0] || ".";
+      const top = (pathByNode.get(nodeId) ?? "").split("/")[0] || ".";
       if (!byCluster.has(cid)) byCluster.set(cid, new Map());
       const m = byCluster.get(cid)!;
       m.set(top, (m.get(top) ?? 0) + 1);

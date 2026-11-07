@@ -93,3 +93,112 @@ export function changedFilesVsBase(repoRoot: string, base: string): ChangedVsBas
   for (const p of changedFilesVsHead(repoRoot)) files.add(p);
   return { files: [...files], baseInvalid, base };
 }
+
+/** Ambil SHA pendek HEAD git saat ini (`git rev-parse --short HEAD`), atau null bila bukan repo git / belum ada commit. */
+export function currentGitHead(repoRoot: string): string | null {
+  try {
+    const out = execFileSync("git", ["rev-parse", "--short", "HEAD"], {
+      cwd: repoRoot,
+      encoding: "utf8",
+      timeout: 5000,
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    return out || null;
+  } catch {
+    return null;
+  }
+}
+
+export interface GitDriftSince {
+  currentHead: string | null;
+  commitsSinceSave: number;
+  changedFiles: string[];
+}
+
+/**
+ * Hitung jumlah commit dan daftar file yang berubah sejak `savedHead`
+ * (mencakup commit baru `savedHead..HEAD` + perubahan working tree saat ini).
+ */
+export function gitDriftSince(repoRoot: string, savedHead: string | null): GitDriftSince {
+  const currentHead = currentGitHead(repoRoot);
+  let commitsSinceSave = 0;
+  const committedFiles = new Set<string>();
+  const files = new Set<string>();
+
+  if (savedHead && savedHead !== "none" && currentHead) {
+    try {
+      const countRaw = execFileSync("git", ["rev-list", "--count", `${savedHead}..HEAD`], {
+        cwd: repoRoot,
+        encoding: "utf8",
+        timeout: 8000,
+        stdio: ["ignore", "pipe", "ignore"],
+      }).trim();
+      const parsed = Number.parseInt(countRaw, 10);
+      if (Number.isFinite(parsed) && parsed >= 0) {
+        commitsSinceSave = parsed;
+      }
+    } catch {
+      commitsSinceSave = 0;
+    }
+
+    try {
+      const diffOut = execFileSync("git", ["diff", "--name-only", `${savedHead}..HEAD`], {
+        cwd: repoRoot,
+        encoding: "utf8",
+        timeout: 8000,
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+      for (const line of diffOut.split("\n")) {
+        const p = decodeGitPath(line);
+        if (p) {
+          committedFiles.add(p);
+          files.add(p);
+        }
+      }
+    } catch {
+      // Abaikan bila savedHead sudah tidak terjangkau
+    }
+  }
+
+  for (const p of changedFilesVsHead(repoRoot)) {
+    if (p) files.add(p);
+  }
+
+  const changedFiles = [...files]
+    .filter((f) => {
+      if (f.startsWith(".scopecairn/")) return false;
+      // Jangan laporkan .gitignore yang hanya baru ditambahkan otomatis oleh session save
+      if (f === ".gitignore" && !committedFiles.has(".gitignore")) {
+        try {
+          const diff = execFileSync("git", ["diff", "HEAD", "--", ".gitignore"], {
+            cwd: repoRoot,
+            encoding: "utf8",
+            timeout: 3000,
+            stdio: ["ignore", "pipe", "ignore"],
+          });
+          if (!diff.trim()) return false; // untracked .gitignore dari ensureSessionGitignored
+          const addedLines = diff
+            .split("\n")
+            .filter((l) => l.startsWith("+") && !l.startsWith("+++"))
+            .map((l) => l.slice(1).trim())
+            .filter(Boolean);
+          const removedLines = diff
+            .split("\n")
+            .filter((l) => l.startsWith("-") && !l.startsWith("---"));
+          if (
+            removedLines.length === 0 &&
+            addedLines.length > 0 &&
+            addedLines.every((l) => l === ".scopecairn/" || l === ".scopecairn/session.md")
+          ) {
+            return false;
+          }
+        } catch {
+          return false;
+        }
+      }
+      return true;
+    })
+    .sort((a, b) => a.localeCompare(b));
+
+  return { currentHead, commitsSinceSave, changedFiles };
+}

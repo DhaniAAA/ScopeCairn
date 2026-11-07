@@ -9,6 +9,7 @@ import {
   findAgentsMd,
   loadProjectRules,
   demoteHeadings,
+  stripManagedBlock,
 } from "../src/scope/agentsmd.js";
 import { buildContext } from "../src/retrieval/contextBuilder.js";
 import { DEFAULT_CONFIG } from "../src/retrieval/config.js";
@@ -191,6 +192,45 @@ test("context merender Project Rules dengan heading diturunkan agar tidak memeca
     assert.ok(!built.markdown.includes("\n## Wajib"));
   } finally {
     db.close();
+  }
+});
+
+test("stripManagedBlock membuang blok managed dan mempertahankan konten asli", () => {
+  const userText = "# Catatan Proyek\n- aturan asli.";
+  const combinedId = `${userText}\n\n<!-- scopecairn:managed -->\n# ScopeCairn — Protokol Engineering Otomatis\n...tersimpan dengan bukti dan ikut terbaca di setiap context berikutnya.\n`;
+  assert.equal(stripManagedBlock(combinedId), userText);
+
+  const combinedEn = `${userText}\n\n<!-- scopecairn:managed -->\n# ScopeCairn — Automated Engineering Protocol\n...stored with evidence and included in all future contexts.\n`;
+  assert.equal(stripManagedBlock(combinedEn), userText);
+
+  assert.equal(stripManagedBlock(userText), userText);
+});
+
+test("loadProjectRules mengabaikan blok <!-- scopecairn:managed --> milik ScopeCairn", () => {
+  const dir = tmpRepo({
+    "AGENTS.md":
+      "# Catatan Proyek User\n- aturan arsitektur penting\n\n<!-- scopecairn:managed -->\n# ScopeCairn — Automated Engineering Protocol\n...stored with evidence and included in all future contexts.\n",
+  });
+  try {
+    const rules = loadProjectRules(dir);
+    assert.ok(rules);
+    assert.ok(rules.content.includes("# Catatan Proyek User"));
+    assert.ok(rules.content.includes("aturan arsitektur penting"));
+    assert.ok(!rules.content.includes("ScopeCairn — Automated Engineering Protocol"));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("loadProjectRules mengembalikan null jika AGENTS.md hanya berisi blok managed ScopeCairn", () => {
+  const dir = tmpRepo({
+    "AGENTS.md":
+      "<!-- scopecairn:managed -->\n# ScopeCairn — Automated Engineering Protocol\n...stored with evidence and included in all future contexts.\n",
+  });
+  try {
+    assert.equal(loadProjectRules(dir), null);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
   }
 });
 

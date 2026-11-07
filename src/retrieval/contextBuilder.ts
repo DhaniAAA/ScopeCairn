@@ -1,11 +1,14 @@
+import fs from "node:fs";
+import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import type { RetrievalResult, RankedSymbol } from "./retrieve.js";
+import { selectHigh, isTestPath, type RetrievalResult, type RankedSymbol } from "./retrieve.js";
 import type { Classification } from "./classify.js";
 import { loadProtectedPatterns, isProtected } from "../scope/protected.js";
 import { computeScope, scopeBlock, type TaskScope } from "../scope/scope.js";
 import { guardBlock } from "../scope/guard.js";
 import { coChangeSet, groupHistoryFiles, type HistoryAnalog } from "./history/search.js";
 import { demoteHeadings, type ProjectRules } from "../scope/agentsmd.js";
+import { logError } from "../log.js";
 
 // Context Builder (PRD FR-06): Markdown ringkas untuk agent.
 // Prioritas §14: buang tak-relevan → dedup → level simbol → ringkas → source on-demand.
@@ -47,7 +50,7 @@ export function buildContext(
   task: string,
   result: RetrievalResult,
   cls: Classification,
-  opts?: { escalate?: boolean; repoRoot?: string; history?: HistoryBlock; withDiff?: boolean; projectRules?: ProjectRules | null; knowledge?: boolean }
+  opts?: { escalate?: boolean; repoRoot?: string; history?: HistoryBlock; withDiff?: boolean; projectRules?: ProjectRules | null; knowledge?: boolean; withGuard?: boolean; withBodies?: boolean }
 ): BuiltContext {
   const complex = cls.complexity === "COMPLEX" || opts?.escalate === true;
 
@@ -87,8 +90,9 @@ export function buildContext(
   }
 
   const ranked = result.ranked;
-  const hi = ranked.filter((r) => r.score >= 0.3).slice(0, 10);
-  const med = ranked.filter((r) => r.score >= 0.15 && r.score < 0.3).slice(0, 10);
+  const hi = selectHigh(ranked);
+  const hiSet = new Set(hi);
+  const med = ranked.filter((r) => r.score >= 0.15 && !hiSet.has(r)).slice(0, 10);
   const highFiles = [...new Set(hi.map((r) => r.file))];
   const medFiles = [...new Set(med.map((r) => r.file))].filter((f) => !highFiles.includes(f));
 
@@ -114,8 +118,8 @@ export function buildContext(
         )
         .all(...traceSeed, ...traceSeed) as { a: string; b: string }[];
       for (const r of rows) deps.push(`${r.a} → ${r.b}`);
-    } catch {
-      // ignore
+    } catch (err) {
+      logError("contextBuilder:deps", err, opts?.repoRoot);
     }
   }
 
@@ -123,11 +127,7 @@ export function buildContext(
   // findAffectedTests) + file *.test.* di kandidat. Tanpa import dari
   // commands/testselect agar lapisan retrieval tetap bersih.
   // Arah edge: source = file test, target = file yang diuji (lihat linkTests).
-  const isTestFileLike = (p: string): boolean =>
-    p.includes(".test.") ||
-    p.includes(".spec.") ||
-    p.includes("__tests__") ||
-    (p.split("/").pop() ?? "").startsWith("test_");
+  const isTestFileLike = isTestPath;
   const testSet = new Set<string>();
   if (highFiles.length > 0) {
     const ph = highFiles.map(() => "?").join(",");
@@ -144,8 +144,8 @@ export function buildContext(
         )
         .all(...highFiles) as { t: string }[];
       for (const r of rows) testSet.add(r.t);
-    } catch {
-      // ignore
+    } catch (err) {
+      logError("contextBuilder:tests", err, opts?.repoRoot);
     }
     // 2-hop: simbol HIGH -> callers (1-hop) -> callers-of-callers (2-hop).
     // Bila caller tinggal di file test, anggap test terkait.
@@ -197,8 +197,8 @@ export function buildContext(
           }
         }
       }
-    } catch {
-      // ignore — fallback ke TESTS edge + nama file saja
+    } catch (err) {
+      logError("contextBuilder:callers", err, opts?.repoRoot);
     }
   }
   for (const r of ranked) {
@@ -206,8 +206,45 @@ export function buildContext(
   }
   const tests = [...testSet].slice(0, 10);
 
-  const symLine = (r: (typeof ranked)[number]): string =>
-    `- ${r.name} (${r.type}) — \`${r.file}\` [${r.score.toFixed(2)} ${r.reason}]`;
+  const callerStmt = (() => {
+    try {
+      return db.prepare(
+        `SELECT DISTINCT s.name AS name, f.path AS file, s.start_line AS startLine
+         FROM relationships r
+         JOIN symbols s ON s.id = r.source_id
+         JOIN files f ON f.id = s.file_id
+         WHERE r.target_id = ? AND r.relationship_type IN ('CALLS','IMPORTS') AND s.type != 'file' AND s.id != ?
+         LIMIT 3`
+      );
+    } catch {
+      return null;
+    }
+  })();
+
+  const symLine = (r: (typeof ranked)[number]): string => {
+    const loc =
+      r.startLine && r.startLine > 0
+        ? `${r.file}:${r.startLine}-${r.endLine ?? r.startLine}`
+        : r.file;
+    const sig = r.signature
+      ? ` \`${r.signature.replace(/\s+/g, " ").trim().slice(0, 90)}\``
+      : "";
+    let callersLine = "";
+    if (callerStmt) {
+      try {
+        const cRows = callerStmt.all(r.id, r.id) as { name: string; file: string; startLine?: number }[];
+        if (cRows.length > 0) {
+          const formatted = cRows
+            .map((c) => `${c.name} (\`${c.file}${c.startLine && c.startLine > 0 ? `:${c.startLine}` : ""}\`)`)
+            .join(", ");
+          callersLine = `\n  ↳ called-by: ${formatted}`;
+        }
+      } catch {
+        // ignore if schema lacks columns in minimal test fixtures
+      }
+    }
+    return `- ${r.name} (${r.type}) — \`${loc}\`${sig} [${r.score.toFixed(2)} ${r.reason}]${callersLine}`;
+  };
 
   const hotspotLine = (h: ContextHotspot): string =>
     `- ${h.name} (${h.type}) — \`${h.file}\` [pr=${h.pagerank.toFixed(4)}]`;
@@ -253,8 +290,15 @@ export function buildContext(
           `\n`;
       }
     }
-  } catch {
-    // tabel metrik/siklus belum ada — lewati tanpa gagal
+  } catch (err) {
+    logError("contextBuilder:metrics", err, opts?.repoRoot);
+  }
+
+  // Closed-loop learning: masukkan file task terverifikasi ke High/Required
+  const verifiedAnalogs = result.verifiedAnalogs ?? [];
+  const verifiedFiles = [...new Set(verifiedAnalogs.flatMap((v) => v.files))];
+  for (const vf of verifiedFiles) {
+    if (!highFiles.includes(vf)) highFiles.push(vf);
   }
 
   // Task Scope nyata (FR-07): Required/Optional/Protected dari pola path.
@@ -266,6 +310,18 @@ export function buildContext(
     .map((c) => c.path)
     .filter((f) => !isProtected(f, patterns));
   const scope = computeScope(highFiles, medFiles, tests, patterns, historyOptional);
+
+  // Bagian Analogi task terverifikasi (pembelajaran loop tertutup)
+  let verifiedBlock = "";
+  if (verifiedAnalogs.length > 0) {
+    const lines: string[] = [`## Analogi task terverifikasi`, ``];
+    for (const v of verifiedAnalogs) {
+      lines.push(`- "${v.description}" (${v.verifiedAt.slice(0, 10)})`);
+      lines.push(`  file: ${v.files.map((f) => `\`${f}\``).join(", ")}`);
+    }
+    lines.push(``);
+    verifiedBlock = lines.join("\n") + "\n";
+  }
 
   // Bagian Analogi riwayat (disembunyikan bila tak ada analog lolos ambang).
   let historyBlock = "";
@@ -336,6 +392,7 @@ export function buildContext(
         : ``) +
       `## Cara pakai\n${kSyms.slice(0, 8).map(symLine).join("\n") || "-"}\n\n` +
       `## Related Tests\n${tests.map((t) => `- ${t}`).join("\n") || "-"}\n\n` +
+      verifiedBlock +
       historyBlock +
       cycleWarn;
     return {
@@ -349,6 +406,44 @@ export function buildContext(
     };
   }
 
+  // Micro-Excerpts: sertakan potongan kode untuk maks 2 simbol HIGH non-file
+  // yang berukuran ringkas (≤25 baris secara otomatis, atau ≤40 baris saat --with-bodies)
+  // agar agent tidak perlu memanggil `read symbol` / `read_file` terpisah.
+  let excerptsBlock = "";
+  if (opts?.withBodies !== false && opts?.repoRoot) {
+    const excerptLines: string[] = [];
+    const maxSpan = opts?.withBodies === true ? 40 : 25;
+    const candidates = hi
+      .filter(
+        (r) =>
+          r.type !== "file" &&
+          (opts?.withBodies === true || r.type !== "variable") &&
+          r.startLine &&
+          r.startLine > 0
+      )
+      .slice(0, 2);
+    for (const r of candidates) {
+      const start = r.startLine!;
+      const rawEnd = r.endLine && r.endLine >= start ? r.endLine : start;
+      const span = rawEnd - start + 1;
+      if (opts?.withBodies !== true && (span <= 1 || span > maxSpan)) continue;
+      try {
+        const abs = path.join(opts.repoRoot, r.file);
+        const fileLines = fs.readFileSync(abs, "utf8").replace(/\r\n/g, "\n").split("\n");
+        const end = Math.min(fileLines.length, opts?.withBodies === true && rawEnd === start ? start + 24 : Math.min(rawEnd, start + maxSpan - 1));
+        const body = fileLines.slice(start - 1, end).join("\n").trimEnd();
+        if (body) {
+          excerptLines.push(`### ${r.name} (\`${r.file}:${start}-${end}\`)\n\`\`\`\n${body}\n\`\`\``);
+        }
+      } catch {
+        // file tidak ada di disk (mis. fixture test in-memory) → lewati
+      }
+    }
+    if (excerptLines.length > 0) {
+      excerptsBlock = `## Key Excerpts\n${excerptLines.join("\n\n")}\n\n`;
+    }
+  }
+
   const md =
     `# Task Context\n\n## Task\n${task}\n\n` +
     `## Complexity\n${cls.complexity} (${cls.reasons.join("; ")})\n\n` +
@@ -356,16 +451,19 @@ export function buildContext(
     `## Relevant Files\n### HIGH\n${highFiles.map((f) => `- ${f}`).join("\n") || "-"}\n` +
     `### MEDIUM\n${medFiles.map((f) => `- ${f}`).join("\n") || "-"}\n\n` +
     `## Key Symbols\n${hi.slice(0, 8).map(symLine).join("\n") || "-"}\n\n` +
+    excerptsBlock +
     (hotspots.length > 0
       ? `## Critical hotspots (PageRank)\n${hotspots.map(hotspotLine).join("\n")}\n\n`
       : ``) +
     `## Dependencies\n${deps.map((d) => `- ${d}`).join("\n") || "-"}\n\n` +
     `## Related Tests\n${tests.map((t) => `- ${t}`).join("\n") || "-"}\n\n` +
+    verifiedBlock +
     historyBlock +
     cycleWarn +
     scopeBlock(scope) +
-    `\n` +
-    guardBlock(extraDoD.length > 0 ? extraDoD : undefined);
+    (opts?.withGuard
+      ? `\n` + guardBlock(extraDoD.length > 0 ? extraDoD : undefined)
+      : ``);
 
   return {
     markdown: md,

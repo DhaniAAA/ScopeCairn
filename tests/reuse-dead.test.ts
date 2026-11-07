@@ -268,8 +268,9 @@ test("scopecairn reuse & dead bekerja akurat pada fixture project (happy path, e
   }
 });
 
-test("dogfooding: scopecairn reuse dan dead bekerja bersih pada repo ScopeCairn sendiri", () => {
+test("dogfooding: scopecairn reuse dan dead bekerja bersih pada repo ScopeCairn sendiri", async () => {
   const repoRoot = path.resolve(import.meta.dirname, "..");
+  await scanRepository(repoRoot);
   const db = openDb(repoRoot);
   try {
     // 1. Dogfood reuse pada repo sendiri
@@ -305,6 +306,7 @@ test("dogfooding: scopecairn reuse dan dead bekerja bersih pada repo ScopeCairn 
 
 test("CLI output --json untuk cmdReuse dan cmdDead menghasilkan JSON terstruktur yang valid", async () => {
   const repoRoot = path.resolve(import.meta.dirname, "..");
+  await scanRepository(repoRoot);
   const logs: string[] = [];
   const origLog = console.log;
   console.log = (...args: unknown[]) => {

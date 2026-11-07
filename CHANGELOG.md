@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.16.1 (2026-11-07)
+
+- fix: make dogfooding reuse/dead tests self-contained (scan before search) (7a8eb85)
+
 ## 0.16.0 (2026-11-07)
 
 - feat: phased optimizations and new features (0-6) + template revision (c4bf7d7)

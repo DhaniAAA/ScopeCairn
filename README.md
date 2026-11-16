@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://nodejs.org"><img src="https://img.shields.io/badge/node-%3E%3D20-22c55e.svg?style=flat-square" alt="Node.js version"></a>
+  <a href="https://nodejs.org"><img src="https://img.shields.io/badge/node-%3E%3D22.5-22c55e.svg?style=flat-square" alt="Node.js version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-6366f1.svg?style=flat-square" alt="License: MIT"></a>
   <img src="https://img.shields.io/badge/local--first-100%25-00f0ff.svg?style=flat-square" alt="Local-First">
   <img src="https://img.shields.io/badge/telemetry-zero-a855f7.svg?style=flat-square" alt="Zero Telemetry">
@@ -98,7 +98,7 @@ No MCP server, no embeddings, no network calls, no telemetry.
 npm install -g scopecairn
 ```
 
-Requires Node.js ≥ 20.
+Requires Node.js ≥ 22.5.0.
 
 Upgrade later with:
 
@@ -201,12 +201,12 @@ ScopeCairn organizes its capabilities into **6 core commands** aligned with code
 
 | Core Command | Description & Key Options |
 | ------------ | ------------------------- |
-| `scan` | **Index & Database Lifecycle:** Index repository. Options: `--rebuild` (rebuild from scratch), `--clean` (remove `.scopecairn/`), `--watch` (auto-refresh daemon on file save). |
+| `scan` | **Index & Database Lifecycle:** Index repository (including monorepo workspaces & `tsconfig.json` path aliases). Options: `--rebuild` (rebuild from scratch), `--clean` (remove `.scopecairn/`), `--watch` (auto-refresh daemon on file save), `--changed-only`, `--lsp`, `--json`. |
 | `context "<task>"` | **AI Agent Context & Scope:** Main agent entry point with auto-refresh, task classification, relevant context, task scope, and Task Guard. Options: `--escalate`, `--mode NORMAL\|FAST\|SAFE\|AUDIT`, `--max-tokens N`, `--no-history`, `--with-diff`, `--json`. |
 | `impact <target>` | **Blast Radius & Test Selection:** Change impact analysis across direct, indirect, tests, UI components, and API clients. Options: `--run-tests` (run affected tests directly), `--tests` (list affected tests only), `--repos [list]` (cross-repo blast radius). |
 | `graph [symbol]` | **Knowledge Graph & Navigation:** Symbol relations, PageRank centrality, community clusters, and cycle status. Options: `--to <target>` (shortest multi-hop call path), `--export <fmt>` (`mermaid\|graphml\|dot\|json`). |
-| `verify` | **Pre-Commit Safety & Testing Gate:** Working tree check against protected files, task scope creep, circular dependency regressions, and test gate. Options: `--diff` (structural symbol-level diff vs HEAD), `--arch` (architectural layer rules), `--dod` (Definition of Done: verified / warned / manual, never a claimed pass), `--test-gate` (detect weakened tests, enforce changed-line coverage default 80% for Vitest/Jest, optional `--mutation` via Stryker), `--strict`, `--task <t>`. |
-| `status` | **Health & Diagnostics:** Index statistics and metadata. Options: `--doctor` (integration and adapter health check), `--usage` (local usage & compliance report), `--verbose`, `--html` (generate local HTML dashboard). |
+| `verify` | **Pre-Commit Safety & Testing Gate:** Working tree & diff guard against leaked secrets, protected files, task scope creep, circular dependency regressions, and test gate. Options: `--diff` (structural symbol-level diff vs HEAD), `--arch` (architectural layer rules), `--dod` (Definition of Done), `--test-gate` (weakened tests + changed-line coverage across Vitest/Jest/Node/pytest/Go via Istanbul/LCOV/V8/Cobertura/Go coverprofile, optional `--mutation` via Stryker), `--pr-risk`, `--sarif` (unified SARIF v2.1.0), `--strict`, `--task <t>`, `--json`. |
+| `status` | **Health & Diagnostics:** Index statistics and metadata. Options: `--doctor` (integration and adapter health check), `--usage` (local usage & compliance report), `--verbose`, `--html` (generate local HTML dashboard), `--json`. |
 
 ### Helper & Setup Commands
 
@@ -225,7 +225,7 @@ ScopeCairn organizes its capabilities into **6 core commands** aligned with code
 
 Running `scopecairn init --hooks` installs a managed `.git/hooks/pre-commit` guard that executes `scopecairn verify --no-strict --test-gate`:
 - **Weakened Test Detection:** Blocks diffs in test files that delete assertions (`expect`/`assert`), add `.skip`/`.todo`/`xit`, or loosen strict matchers (`toBe`/`toEqual` → `toBeDefined`/`toBeTruthy` or tautological `expect(true).toBe(true)`).
-- **Changed-Line Coverage (Vitest & Jest):** Evaluates coverage on modified/added executable source lines against a configurable threshold (`coverage_threshold: 80` in `.scopecairn/config.yml`, or `--coverage-threshold <n>`).
+- **Changed-Line Coverage (Vitest, Jest, Node, pytest, Go):** Evaluates coverage on modified/added executable source lines from Istanbul JSON, LCOV, V8 Coverage JSON, Cobertura XML, or Go coverprofile against a configurable threshold (`coverage_threshold: 80` in `.scopecairn/config.yml`, or `--coverage-threshold <n>`).
 - **Optional Mutation Testing (Stryker):** Supports `--mutation` (or `mutation_enabled: true` in `.scopecairn/config.yml`) to validate mutation score on changed files via Stryker (`--testRunner vitest|jest`). Disabled by default because mutation testing is slow.
 - **Limitation (`--no-verify` bypass):** Because an AI agent or developer can bypass local git hooks using `git commit --no-verify`, always run the same check in your CI pipeline:
   ```bash

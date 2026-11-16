@@ -3,6 +3,9 @@ import path from "node:path";
 import { dataDir } from "../db.js";
 import { currentGitHead, gitDriftSince } from "../retrieval/gitChanged.js";
 
+import { detectSecrets } from "../scope/secrets.js";
+export { detectSecrets };
+
 export const MAX_SESSION_CHARS = 4000;
 export const SESSION_REL_PATH = ".scopecairn/session.md";
 
@@ -46,66 +49,6 @@ export interface SessionLoadResult {
   changedFiles: string[];
   sections: SessionSections;
   raw: string | null;
-}
-
-interface SecretRule {
-  label: string;
-  pattern: RegExp;
-}
-
-const SECRET_RULES: SecretRule[] = [
-  {
-    label: "OpenAI / Anthropic API Key",
-    pattern: /\bsk-(?:proj-|ant-|live-|test-)?[A-Za-z0-9_-]{16,}\b/,
-  },
-  {
-    label: "GitHub Token",
-    pattern: /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}\b|\bgithub_pat_[A-Za-z0-9_]{20,}\b/,
-  },
-  {
-    label: "AWS Access Key",
-    pattern: /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/,
-  },
-  {
-    label: "Google API Key",
-    pattern: /\bAIza[0-9A-Za-z_-]{35}\b/,
-  },
-  {
-    label: "Slack Token",
-    pattern: /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/,
-  },
-  {
-    label: "Stripe API Key",
-    pattern: /\b(?:sk|rk)_(?:live|test)_[0-9a-zA-Z]{16,}\b/,
-  },
-  {
-    label: "Private Key",
-    pattern: /-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY-----/,
-  },
-  {
-    label: "JWT Token",
-    pattern: /\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/,
-  },
-  {
-    label: "Bearer Token",
-    pattern: /\bBearer\s+[A-Za-z0-9._~+/=-]{20,}\b/,
-  },
-  {
-    label: "Generic Secret / Token Assignment",
-    pattern:
-      /(?:api[_-]?key|secret[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|private[_-]?key|password|passwd)\s*[:=]\s*["']?[A-Za-z0-9._~+/=-]{8,}["']?/i,
-  },
-];
-
-/** Deteksi pola rahasia (API key, token, private key) pada teks sesi. */
-export function detectSecrets(text: string): string[] {
-  const found: string[] = [];
-  for (const rule of SECRET_RULES) {
-    if (rule.pattern.test(text)) {
-      found.push(rule.label);
-    }
-  }
-  return found;
 }
 
 function sessionAbsPath(repoRoot: string): string {

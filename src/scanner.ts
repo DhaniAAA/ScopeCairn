@@ -5,7 +5,15 @@ import { grammarForPath } from "./extract/treeSitter.js";
 import { prepareTreeSitter } from "./treesitter.js";
 import { hashContent, openDb, dataDir } from "./db.js";
 import { loadIgnoreRules, isIgnored } from "./ignore.js";
-import { indexFileSymbols, indexFileRelations, indexMetaFile, linkTests } from "./indexer.js";
+import {
+  indexFileSymbols,
+  indexFileRelations,
+  indexMetaFile,
+  linkTests,
+  seedExportRelations,
+  type ModuleResolverContext,
+} from "./indexer.js";
+import { discoverWorkspaces } from "./workspace.js";
 import { cleanupIndex } from "./retrieval/symbolIndex.js";
 import { ensureDefaultFiles } from "./retrieval/config.js";
 import { isIndexableMetaFile, loadProtectedPatterns } from "./scope/protected.js";
@@ -18,7 +26,7 @@ import { buildVisualModel, renderHtml, GRAPH_HTML_NAME } from "./graph/visual.js
 import { writeArchaeologyIfAbsent } from "./archaeology.js";
 import { ensureCycles } from "./graph/cycles.js";
 import { changedFilesVsHead } from "./retrieval/gitChanged.js";
-import { detectLsp, type LspStatus } from "./extract/lsp.js";
+import { detectLsp, enrichRelationsWithLsp, type LspStatus } from "./extract/lsp.js";
 
 export interface ScanStats {
   repoRoot: string;
@@ -37,6 +45,7 @@ export interface ScanStats {
   durationMs: number;
   /** Hanya terisi bila `--lsp` diberikan (deteksi best-effort, tak wajib). */
   lsp?: LspStatus;
+  lspUpgraded?: number;
 }
 
 function toPosixRel(repoRoot: string, abs: string): string {
@@ -193,7 +202,7 @@ export async function scanRepository(
 
     // Two-phase indexing: phase 1 inserts symbols for all changed files,
     // phase 2 resolves relations — cross-file edges are order-independent.
-    const pending: { fileId: number; rel: string; content: string }[] = [];
+    const pending: { fileId: number; rel: string; content: string; language: string }[] = [];
     const metaChanged: { fileId: number; rel: string; content: string }[] = [];
 
     for (const abs of scanAbs) {
@@ -221,7 +230,7 @@ export async function scanRepository(
       if (!row) {
         const r = insertStmt.run(rel, language, hash, buf.length);
         if (source) {
-          pending.push({ fileId: Number(r.lastInsertRowid), rel, content: buf.toString("utf8") });
+          pending.push({ fileId: Number(r.lastInsertRowid), rel, content: buf.toString("utf8"), language });
         } else {
           indexMetaFile(db, Number(r.lastInsertRowid), rel);
           metaChanged.push({ fileId: Number(r.lastInsertRowid), rel, content: buf.toString("utf8") });
@@ -230,7 +239,7 @@ export async function scanRepository(
       } else if (row.hash !== hash || backfill || parserChanged) {
         updateStmt.run(hash, buf.length, language, rel);
         if (source) {
-          pending.push({ fileId: row.id, rel, content: buf.toString("utf8") });
+          pending.push({ fileId: row.id, rel, content: buf.toString("utf8"), language });
         } else {
           indexMetaFile(db, row.id, rel);
           metaChanged.push({ fileId: row.id, rel, content: buf.toString("utf8") });
@@ -261,9 +270,29 @@ export async function scanRepository(
       ...p,
       ...indexFileSymbols(db, p.fileId, p.rel, p.content),
     }));
-    // Phase 2: relations (all symbols now visible globally).
+    // Phase 2: relations (seed EXPORTS dulu agar multi-hop barrel order-independent).
+    const resolverCtx: ModuleResolverContext = {
+      repoRoot,
+      workspaces: discoverWorkspaces(repoRoot),
+      tsConfigCache: new Map(),
+    };
     for (const p of phased) {
-      indexFileRelations(db, p.fileId, p.rel, p.extraction, p.fileSym);
+      seedExportRelations(db, p.fileId, p.rel, p.extraction, p.fileSym, resolverCtx);
+    }
+    for (const p of phased) {
+      indexFileRelations(db, p.fileId, p.rel, p.extraction, p.fileSym, resolverCtx);
+    }
+
+    // LSP opsional (default off): deteksi biner dan tingkatkan edge AMBIGUOUS bila tersedia.
+    let lsp: LspStatus | undefined;
+    let lspUpgraded = 0;
+    if (opts?.lsp) {
+      try {
+        lsp = detectLsp();
+        lspUpgraded = await enrichRelationsWithLsp(db, repoRoot, pending, lsp);
+      } catch {
+        lsp = undefined;
+      }
     }
 
     // Phase 3: framework adapters (FR-13) atas file yang berubah —
@@ -381,17 +410,6 @@ export async function scanRepository(
       db.prepare(`SELECT COUNT(*) AS n FROM relationships`).get() as { n: number }
     ).n;
 
-    // LSP opsional (default off): hanya deteksi ketersediaan biner, tak
-    // mengubah ekstraksi Tree-sitter dan tak pernah menggagalkan scan.
-    let lsp: LspStatus | undefined;
-    if (opts?.lsp) {
-      try {
-        lsp = detectLsp();
-      } catch {
-        lsp = undefined;
-      }
-    }
-
     return {
       repoRoot,
       totalFilesSeen,
@@ -407,7 +425,7 @@ export async function scanRepository(
       unchanged,
       removed,
       durationMs: Date.now() - started,
-      ...(lsp ? { lsp } : {}),
+      ...(lsp ? { lsp, lspUpgraded } : {}),
     };
   } finally {
     if (inTx) {

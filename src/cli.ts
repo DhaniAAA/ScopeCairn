@@ -101,8 +101,9 @@ program
   .option("--watch", "watch repository files and auto-refresh index in background")
   .option("--debounce <ms>", "debounce time in milliseconds for watch mode (default 300)", intArg)
   .option("--changed-only", "hanya proses file yang berubah menurut git (+ file baru belum terindeks)")
-  .option("--lsp", "deteksi LSP opsional (tsserver/gopls/pyright) — best-effort, default off")
-  .action((opts: { rebuild?: boolean; clean?: boolean; watch?: boolean; debounce?: number; changedOnly?: boolean; lsp?: boolean }) =>
+  .option("--lsp", "deteksi dan resolusi simbol via LSP opsional (typescript-language-server/gopls/pyright)")
+  .option("--json", "output results as JSON")
+  .action((opts: { rebuild?: boolean; clean?: boolean; watch?: boolean; debounce?: number; changedOnly?: boolean; lsp?: boolean; json?: boolean }) =>
     cmdScan(repoRoot(), opts)
   );
 
@@ -186,8 +187,8 @@ program
   .option("--mutation-threshold <n>", "minimum Stryker mutation score percentage (default 60)", intArg)
   .option("--run-coverage", "execute Vitest/Jest with --coverage before evaluating changed-line coverage")
   .option("--run-mutation", "execute Stryker mutation runner directly on changed files")
-  .option("--pr-risk", "hitung PR risk agregat (protected/cycle/fan-in) vs --base (default origin/main) + SARIF sederhana")
-  .option("--sarif", "cetak SARIF sederhana (membutuh --pr-risk)")
+  .option("--pr-risk", "hitung PR risk agregat (protected/cycle/fan-in) vs --base (default origin/main) + SARIF")
+  .option("--sarif", "cetak laporan SARIF v2.1.0 (secrets/protected/cycles/scope/--arch/--test-gate/--pr-risk)")
   .option("--init", "generate initial .scopecairn/arch.json configuration template (with --arch)")
   .option("--task <task>", "task description to check scope creep against")
   .option("--base <ref>", "compare against a base ref (e.g. main, origin/main, HEAD~3) to include committed changes")
@@ -228,7 +229,8 @@ program
   .option("--html", "generate a local HTML dashboard into .scopecairn/dashboard.html")
   .option("--usage", "local usage & compliance report (invocations, closed loop)")
   .option("--out <path>", "output file for dashboard HTML")
-  .action((opts: { doctor?: boolean; verbose?: boolean; html?: boolean; usage?: boolean; out?: string }) =>
+  .option("--json", "output results as JSON")
+  .action((opts: { doctor?: boolean; verbose?: boolean; html?: boolean; usage?: boolean; out?: string; json?: boolean }) =>
     cmdStatus(repoRoot(), opts)
   );
 

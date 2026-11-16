@@ -14,9 +14,10 @@ import {
   type DodCheck,
 } from "../scope/dod.js";
 import { cmdDiff } from "./diff.js";
-import { cmdArchCheck } from "./archcheck.js";
+import { checkArchitecture, cmdArchCheck, type ArchCheckResult } from "./archcheck.js";
 import { recordVerifiedTask } from "../retrieval/verified.js";
 import { runTestGate, type TestGateResult } from "../scope/testGate.js";
+import { scanSecretsInDiff, type SecretFinding } from "../scope/secrets.js";
 
 export interface VerifyOptions {
   task?: string;
@@ -55,6 +56,7 @@ export interface VerifyResult {
   ok: boolean;
   changedFiles: string[];
   protectedViolations: string[];
+  secretFindings: SecretFinding[];
   scopeViolations: string[];
   cycles: {
     hash: string;
@@ -66,6 +68,8 @@ export interface VerifyResult {
   dod?: DodCheck[];
   /** Hanya terisi bila `--test-gate` (atau opsi coverage/mutation) diberikan. */
   testGate?: TestGateResult;
+  /** Hanya terisi bila `--arch` diberikan (termasuk `--arch --sarif`). */
+  arch?: ArchCheckResult;
   /**
    * Dari mana scope diambil: `persisted` = scope yang tersimpan dari
    * `context` (kontak yang sama dengan agent), `computed` = dihitung ulang
@@ -125,12 +129,51 @@ export interface PrRiskReport {
 
 const RISK_ORDER: Record<PrRiskLevel, number> = { LOW: 0, MED: 1, HIGH: 2 };
 
-function buildPrRiskSarif(files: PrRiskFile[]): SarifLog {
-  const levelOf: Record<PrRiskLevel, "error" | "warning" | "note"> = {
-    HIGH: "error",
-    MED: "warning",
-    LOW: "note",
+type SarifLevel = "error" | "warning" | "note";
+
+interface SarifRuleDef {
+  id: string;
+  name: string;
+}
+
+const VERIFY_SARIF_RULES: Record<string, SarifRuleDef> = {
+  "protected-file": { id: "protected-file", name: "Protected file modified" },
+  "secret-detected": { id: "secret-detected", name: "Potential secret or credential leaked in diff" },
+  "scope-violation": { id: "scope-violation", name: "Modification outside task scope" },
+  "circular-dependency": { id: "circular-dependency", name: "Circular dependency involving changed files" },
+  "arch-violation": { id: "arch-violation", name: "Architectural boundary violation" },
+  "test-gate/weakened-test": { id: "test-gate/weakened-test", name: "Test assertions or matchers weakened" },
+  "test-gate/coverage": { id: "test-gate/coverage", name: "Changed lines coverage below threshold" },
+  "test-gate/mutation": { id: "test-gate/mutation", name: "Stryker mutation score below threshold" },
+  "pr-risk/HIGH": { id: "pr-risk/HIGH", name: "High PR risk" },
+  "pr-risk/MED": { id: "pr-risk/MED", name: "Medium PR risk" },
+  "pr-risk/LOW": { id: "pr-risk/LOW", name: "Low PR risk" },
+};
+
+function makeSarifResult(
+  ruleId: string,
+  level: SarifLevel,
+  text: string,
+  uri: string,
+  startLine = 1
+): SarifRun["results"][number] {
+  return {
+    ruleId,
+    level,
+    message: { text },
+    locations: [
+      {
+        physicalLocation: {
+          artifactLocation: { uri: uri.replace(/\\/g, "/") },
+          region: { startLine: Math.max(1, startLine) },
+        },
+      },
+    ],
   };
+}
+
+function wrapSarifRun(results: SarifRun["results"], ruleIds: string[]): SarifLog {
+  const uniqueRuleIds = [...new Set(ruleIds)];
   return {
     $schema: "https://json.schemastore.org/sarif-2.1.0.json",
     version: "2.1.0",
@@ -139,29 +182,116 @@ function buildPrRiskSarif(files: PrRiskFile[]): SarifLog {
         tool: {
           driver: {
             name: "scopecairn",
-            rules: [
-              { id: "pr-risk/HIGH", name: "High PR risk" },
-              { id: "pr-risk/MED", name: "Medium PR risk" },
-              { id: "pr-risk/LOW", name: "Low PR risk" },
-            ],
+            rules: uniqueRuleIds.map(
+              (id) => VERIFY_SARIF_RULES[id] ?? { id, name: id }
+            ),
           },
         },
-        results: files.map((f) => ({
-          ruleId: `pr-risk/${f.risk}`,
-          level: levelOf[f.risk],
-          message: { text: `PR risk ${f.risk} (${f.reasons.join("; ")})` },
-          locations: [
-            {
-              physicalLocation: {
-                artifactLocation: { uri: f.path },
-                region: { startLine: 1 },
-              },
-            },
-          ],
-        })),
+        results,
       },
     ],
   };
+}
+
+function buildPrRiskSarif(files: PrRiskFile[]): SarifLog {
+  const levelOf: Record<PrRiskLevel, SarifLevel> = {
+    HIGH: "error",
+    MED: "warning",
+    LOW: "note",
+  };
+  const results = files.map((f) =>
+    makeSarifResult(
+      `pr-risk/${f.risk}`,
+      levelOf[f.risk],
+      `PR risk ${f.risk} (${f.reasons.join("; ")})`,
+      f.path,
+      1
+    )
+  );
+  return wrapSarifRun(results, ["pr-risk/HIGH", "pr-risk/MED", "pr-risk/LOW"]);
+}
+
+/**
+ * Bangun laporan SARIF v2.1.0 terpadu untuk seluruh pemeriksaan `verify`:
+ * protected files, secret scanning, scope creep, cycles, architecture rules,
+ * testing gate, dan PR risk.
+ */
+export function buildVerifySarif(result: VerifyResult, strict = true): SarifLog {
+  const results: SarifRun["results"] = [];
+  const usedRules: string[] = [];
+  const push = (ruleId: string, level: SarifLevel, text: string, uri: string, line = 1) => {
+    usedRules.push(ruleId);
+    results.push(makeSarifResult(ruleId, level, text, uri, line));
+  };
+
+  for (const f of result.protectedViolations) {
+    push("protected-file", "error", `Protected file modified without explicit consent: ${f}`, f, 1);
+  }
+  for (const s of result.secretFindings) {
+    push("secret-detected", "error", `${s.kind} detected in diff (${s.preview})`, s.file, s.line);
+  }
+  for (const f of result.scopeViolations) {
+    push(
+      "scope-violation",
+      strict ? "error" : "warning",
+      `File modified outside task scope: ${f}`,
+      f,
+      1
+    );
+  }
+  for (const c of result.cycles) {
+    if (!c.involvesChangedFiles) continue;
+    const targetFile = result.changedFiles[0] ?? "package.json";
+    push("circular-dependency", "error", `Circular dependency involving changed files: ${c.description}`, targetFile, 1);
+  }
+  if (result.arch) {
+    for (const v of result.arch.violations) {
+      push(
+        "arch-violation",
+        "error",
+        `${v.fromLayer} -> ${v.toLayer} (${v.toFile})${v.message ? `: ${v.message}` : ""}`,
+        v.fromFile,
+        v.line ?? 1
+      );
+    }
+  }
+  if (result.testGate) {
+    for (const w of result.testGate.weakenedTests) {
+      push("test-gate/weakened-test", "error", `[${w.kind}] ${w.detail} (${w.evidence})`, w.file, 1);
+    }
+    if (result.testGate.coverage.status === "fail") {
+      for (const f of result.testGate.coverage.files) {
+        if (f.uncoveredLines.length === 0) continue;
+        push(
+          "test-gate/coverage",
+          "error",
+          `Changed-line coverage ${f.pct}% below threshold ${result.testGate.coverage.threshold}% (uncovered lines: ${f.uncoveredLines.join(", ")})`,
+          f.file,
+          f.uncoveredLines[0]
+        );
+      }
+    }
+    if (result.testGate.mutation.status === "fail") {
+      for (const f of result.testGate.mutation.files) {
+        if (f.score >= result.testGate.mutation.threshold) continue;
+        push(
+          "test-gate/mutation",
+          "error",
+          `Stryker mutation score ${f.score}% below threshold ${result.testGate.mutation.threshold}% (survived=${f.survived}, noCoverage=${f.noCoverage})`,
+          f.file,
+          1
+        );
+      }
+    }
+  }
+  if (result.prRisk) {
+    const levelOf: Record<PrRiskLevel, SarifLevel> = { HIGH: "error", MED: "warning", LOW: "note" };
+    for (const f of result.prRisk.files) {
+      push(`pr-risk/${f.risk}`, levelOf[f.risk], `PR risk ${f.risk} (${f.reasons.join("; ")})`, f.path, 1);
+    }
+  }
+
+  return wrapSarifRun(results, usedRules);
 }
 
 /**
@@ -431,6 +561,10 @@ export async function runVerify(
         })
       : undefined;
 
+    const secretFindings = scanSecretsInDiff(repoRoot, changed, effectiveBase);
+
+    const arch = opts.arch && !opts.init ? checkArchitecture(repoRoot) : undefined;
+
     const prRisk = opts.prRisk
       ? computePrRisk(db, repoRoot, changed, effectiveBase ?? "origin/main", patterns, Boolean(baseResult?.baseInvalid))
       : undefined;
@@ -439,11 +573,13 @@ export async function runVerify(
 
     let ok = true;
     if (protectedViolations.length > 0) ok = false;
+    if (secretFindings.length > 0) ok = false;
     if (newCycleViolations.length > 0) ok = false;
     const isStrict = opts.strict !== false;
     if (isStrict && scopeViolations.length > 0) ok = false;
     if (dod && dodFailed(dod)) ok = false;
     if (testGate && !testGate.ok) ok = false;
+    if (arch && !arch.ok) ok = false;
     if (baseResult?.baseInvalid) ok = false;
 
     if (ok && scopeChecked && opts.task && changed.length > 0 && !scopeUndetermined) {
@@ -455,11 +591,13 @@ export async function runVerify(
       ok,
       changedFiles: changed,
       protectedViolations,
+      secretFindings,
       scopeViolations,
       cycles: detectedCycles,
       warnings,
       dod,
       testGate,
+      arch,
       prRisk,
       scopeSource,
       scopeUndetermined: scopeUndetermined || undefined,
@@ -479,15 +617,17 @@ export async function cmdVerify(
     cmdDiff(repoRoot, { json: opts.json });
     return;
   }
-  if (opts.arch) {
+  if (opts.arch && !opts.sarif) {
     cmdArchCheck(repoRoot, { init: opts.init, json: opts.json });
     return;
   }
 
   const result = await runVerify(repoRoot, opts);
 
-  if (opts.sarif && result.prRisk) {
-    console.log(JSON.stringify(result.prRisk.sarif, null, 2));
+  if (opts.sarif) {
+    const sarif = buildVerifySarif(result, opts.strict !== false);
+    console.log(JSON.stringify(sarif, null, 2));
+    if (!result.ok) process.exitCode = 1;
     return;
   }
 
@@ -521,6 +661,16 @@ export async function cmdVerify(
     console.log("    Protected files modified without explicit consent:");
     for (const f of result.protectedViolations) {
       console.log(`      • ${f}`);
+    }
+  }
+
+  // Secret scanning check
+  if (result.secretFindings.length === 0) {
+    console.log("[✓] Secret Scanning: PASSED (No secrets detected in diff)");
+  } else {
+    console.log(`[✗] Secret Scanning: FAILED (${result.secretFindings.length} finding(s))`);
+    for (const s of result.secretFindings) {
+      console.log(`      • ${s.file}:${s.line} [${s.kind}] ${s.preview}`);
     }
   }
 

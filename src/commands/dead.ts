@@ -8,6 +8,11 @@ import { skipRefresh } from "./opts.js";
 import { loadProtectedPatterns, isProtected, isIndexableMetaFile } from "../scope/protected.js";
 import { isTestPath } from "../retrieval/retrieve.js";
 import { appRouteFromRel, pagesRouteFromRel, detectMiddleware } from "../adapters/nextjs.js";
+import {
+  discoverWorkspaces,
+  extractPathsFromExportsField,
+  mapDistToSrc,
+} from "../workspace.js";
 
 export type DeadConfidence = "high" | "medium" | "low";
 
@@ -38,44 +43,37 @@ export interface DeadResult {
   findings: DeadFinding[];
 }
 
-function mapDistToSrc(p: string): string[] {
-  const norm = p.replace(/\\/g, "/").replace(/^\.\//, "");
-  const out = new Set<string>([norm]);
-  if (norm.startsWith("dist/")) {
-    const rest = norm.slice(5).replace(/\.(js|mjs|cjs|d\.ts)$/, "");
-    out.add(`src/${rest}.ts`);
-    out.add(`src/${rest}.tsx`);
-    out.add(`src/${rest}.js`);
-    out.add(`src/${rest}/index.ts`);
-  } else if (norm.startsWith("build/") || norm.startsWith("lib/")) {
-    const rest = norm.replace(/^(build|lib)\//, "").replace(/\.(js|mjs|cjs|d\.ts)$/, "");
-    out.add(`src/${rest}.ts`);
-    out.add(`src/${rest}.tsx`);
-    out.add(`src/${rest}.js`);
+function collectPackageEntrypoints(
+  pkg: Record<string, unknown>,
+  pkgDir: string,
+  entrypoints: Set<string>
+): void {
+  const prefix = pkgDir ? `${pkgDir}/` : "";
+  for (const field of ["main", "module", "types", "typings", "browser"]) {
+    if (typeof pkg[field] === "string") {
+      for (const m of mapDistToSrc(pkg[field] as string, pkgDir)) entrypoints.add(m);
+    }
   }
-  const noExt = norm.replace(/\.(js|mjs|cjs)$/, "");
-  if (noExt !== norm) {
-    out.add(`${noExt}.ts`);
-    out.add(`${noExt}.tsx`);
+  if (pkg.bin) {
+    extractPathsFromExportsField(pkg.bin, entrypoints, pkgDir);
   }
-  return [...out];
-}
-
-function extractPathsFromExportsField(val: unknown, out: Set<string>): void {
-  if (typeof val === "string") {
-    for (const mapped of mapDistToSrc(val)) out.add(mapped);
-  } else if (Array.isArray(val)) {
-    for (const item of val) extractPathsFromExportsField(item, out);
-  } else if (val && typeof val === "object") {
-    for (const sub of Object.values(val as Record<string, unknown>)) {
-      extractPathsFromExportsField(sub, out);
+  if (pkg.exports) {
+    extractPathsFromExportsField(pkg.exports, entrypoints, pkgDir);
+  }
+  if (pkg.scripts && typeof pkg.scripts === "object") {
+    for (const scriptCmd of Object.values(pkg.scripts as Record<string, unknown>)) {
+      if (typeof scriptCmd !== "string") continue;
+      const matches = scriptCmd.match(/(?:src|scripts)\/[A-Za-z0-9_./-]+\.(?:ts|tsx|js|mjs|cjs|py)/g);
+      if (matches) {
+        for (const m of matches) entrypoints.add(`${prefix}${m.replace(/\\/g, "/")}`);
+      }
     }
   }
 }
 
 /**
- * Kumpulkan path file entrypoint dari package.json (main, bin, exports, module, types, scripts)
- * serta konvensi standar CLI/library.
+ * Kumpulkan path file entrypoint dari package.json root + semua workspace monorepo
+ * (main, bin, exports, module, types, scripts) serta konvensi standar CLI/library.
  */
 export function collectEntrypointPaths(repoRoot: string): Set<string> {
   const entrypoints = new Set<string>([
@@ -95,28 +93,18 @@ export function collectEntrypointPaths(repoRoot: string): Set<string> {
   if (fs.existsSync(pkgPath)) {
     try {
       const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8")) as Record<string, unknown>;
-      for (const field of ["main", "module", "types", "typings", "browser"]) {
-        if (typeof pkg[field] === "string") {
-          for (const m of mapDistToSrc(pkg[field] as string)) entrypoints.add(m);
-        }
-      }
-      if (pkg.bin) {
-        extractPathsFromExportsField(pkg.bin, entrypoints);
-      }
-      if (pkg.exports) {
-        extractPathsFromExportsField(pkg.exports, entrypoints);
-      }
-      if (pkg.scripts && typeof pkg.scripts === "object") {
-        for (const scriptCmd of Object.values(pkg.scripts as Record<string, unknown>)) {
-          if (typeof scriptCmd !== "string") continue;
-          const matches = scriptCmd.match(/(?:src|scripts)\/[A-Za-z0-9_./-]+\.(?:ts|tsx|js|mjs|cjs|py)/g);
-          if (matches) {
-            for (const m of matches) entrypoints.add(m.replace(/\\/g, "/"));
-          }
-        }
-      }
+      collectPackageEntrypoints(pkg, "", entrypoints);
     } catch {
       // abaikan bila package.json tidak valid
+    }
+  }
+
+  for (const ws of discoverWorkspaces(repoRoot)) {
+    if (ws.ecosystem === "npm" && ws.pkgJson) {
+      entrypoints.add(`${ws.dir}/src/index.ts`);
+      entrypoints.add(`${ws.dir}/src/index.js`);
+      entrypoints.add(`${ws.dir}/src/cli.ts`);
+      collectPackageEntrypoints(ws.pkgJson, ws.dir, entrypoints);
     }
   }
 

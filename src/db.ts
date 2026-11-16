@@ -8,8 +8,15 @@ function loadDatabaseSync(): typeof DatabaseSyncType {
   // Constructed specifier so tsup/esbuild doesn't rewrite "node:sqlite" -> "sqlite".
   const req = createRequire(import.meta.url);
   const spec = "node:" + "sqlite";
-  const m = req(spec) as { DatabaseSync: typeof DatabaseSyncType };
-  return m.DatabaseSync;
+  try {
+    const m = req(spec) as { DatabaseSync: typeof DatabaseSyncType };
+    return m.DatabaseSync;
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      `ScopeCairn membutuhkan Node.js >= 22.5.0 untuk built-in 'node:sqlite' (versi aktif: ${process.version}). Detail: ${detail}`
+    );
+  }
 }
 
 export const DATA_DIR_NAME = ".scopecairn";

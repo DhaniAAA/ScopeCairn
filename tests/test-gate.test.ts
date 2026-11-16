@@ -96,18 +96,35 @@ test("installPreCommitHook memasang verify --test-gate dan mendokumentasikan ket
   }
 });
 
-test("detectGateRunner mengenali Vitest dan Jest serta menandai runner lain sebagai unsupported", () => {
+test("detectGateRunner mengenali Vitest, Jest, Node, pytest, Go, dan menandai runner custom sebagai unsupported", () => {
   const vitestRepo = createRunnerRepo("vitest");
   const jestRepo = createRunnerRepo("jest");
   const nodeRepo = createRunnerRepo("node");
+  const customRepo = fs.mkdtempSync(path.join(os.tmpdir(), "sc-gate-custom-"));
+  const pyRepo = fs.mkdtempSync(path.join(os.tmpdir(), "sc-gate-py-"));
+  const goRepo = fs.mkdtempSync(path.join(os.tmpdir(), "sc-gate-go-"));
   try {
+    fs.writeFileSync(
+      path.join(customRepo, "package.json"),
+      JSON.stringify({ name: "custom", scripts: { test: "echo custom-runner" } }),
+      "utf8"
+    );
+    fs.writeFileSync(path.join(pyRepo, "pytest.ini"), "[pytest]\n", "utf8");
+    fs.writeFileSync(path.join(goRepo, "go.mod"), "module example.com/app\n\ngo 1.22\n", "utf8");
+
     assert.equal(detectGateRunner(vitestRepo), "vitest");
     assert.equal(detectGateRunner(jestRepo), "jest");
-    assert.equal(detectGateRunner(nodeRepo), "unsupported");
+    assert.equal(detectGateRunner(nodeRepo), "node");
+    assert.equal(detectGateRunner(pyRepo), "pytest");
+    assert.equal(detectGateRunner(goRepo), "go");
+    assert.equal(detectGateRunner(customRepo), "unsupported");
   } finally {
     fs.rmSync(vitestRepo, { recursive: true, force: true });
     fs.rmSync(jestRepo, { recursive: true, force: true });
     fs.rmSync(nodeRepo, { recursive: true, force: true });
+    fs.rmSync(customRepo, { recursive: true, force: true });
+    fs.rmSync(pyRepo, { recursive: true, force: true });
+    fs.rmSync(goRepo, { recursive: true, force: true });
   }
 });
 
@@ -377,5 +394,98 @@ test("runVerify & cmdVerify dengan --test-gate menggagalkan verifikasi saat test
     console.log = origLog;
     process.exitCode = origExit;
     fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("evaluateChangedLinesCoverage mendukung V8 Coverage JSON, Cobertura XML, dan Go coverprofile", () => {
+  // 1. V8 JSON untuk Node.js test runner
+  const nodeRepo = createRunnerRepo("node");
+  try {
+    const srcContent = [
+      "export function add(a: number, b: number): number {",
+      "  return a + b;",
+      "}",
+      "export function mul(a: number, b: number): number {",
+      "  return a * b;",
+      "}",
+      "",
+    ].join("\n");
+    const mathAbs = path.join(nodeRepo, "src", "math.ts");
+    fs.writeFileSync(mathAbs, srcContent, "utf8");
+    const mulStart = srcContent.indexOf("export function mul");
+    const mulEnd = srcContent.indexOf("}", mulStart) + 1;
+    fs.mkdirSync(path.join(nodeRepo, "coverage", "v8"), { recursive: true });
+    fs.writeFileSync(
+      path.join(nodeRepo, "coverage", "v8", "coverage-1.json"),
+      JSON.stringify({
+        result: [
+          {
+            url: new URL(`file:///${mathAbs.replace(/\\/g, "/")}`).href,
+            functions: [{ ranges: [{ startOffset: mulStart, endOffset: mulEnd, count: 2 }] }],
+          },
+        ],
+      }),
+      "utf8"
+    );
+    const v8Cov = evaluateChangedLinesCoverage(nodeRepo, ["src/math.ts"], { threshold: 80 });
+    assert.equal(v8Cov.runner, "node");
+    assert.equal(v8Cov.status, "pass");
+    assert.equal(v8Cov.pct, 100);
+  } finally {
+    fs.rmSync(nodeRepo, { recursive: true, force: true });
+  }
+
+  // 2. Cobertura XML untuk pytest
+  const pyRepo = fs.mkdtempSync(path.join(os.tmpdir(), "sc-gate-cob-"));
+  try {
+    git(pyRepo, ["init"]);
+    git(pyRepo, ["config", "user.email", "py@example.com"]);
+    git(pyRepo, ["config", "user.name", "Py Tester"]);
+    fs.writeFileSync(path.join(pyRepo, "pytest.ini"), "[pytest]\n", "utf8");
+    fs.writeFileSync(path.join(pyRepo, "app.py"), "def greet():\n    return 'hi'\n", "utf8");
+    git(pyRepo, ["add", "."]);
+    git(pyRepo, ["commit", "-m", "init"]);
+    fs.writeFileSync(path.join(pyRepo, "app.py"), "def greet():\n    return 'hi'\ndef bye():\n    return 'bye'\n", "utf8");
+    fs.mkdirSync(path.join(pyRepo, "coverage"), { recursive: true });
+    fs.writeFileSync(
+      path.join(pyRepo, "coverage", "coverage.xml"),
+      `<coverage><packages><package><classes><class filename="app.py"><lines><line number="3" hits="1"/><line number="4" hits="0"/></lines></class></classes></package></packages></coverage>`,
+      "utf8"
+    );
+    const pyCov = evaluateChangedLinesCoverage(pyRepo, ["app.py"], { threshold: 80 });
+    assert.equal(pyCov.runner, "pytest");
+    assert.equal(pyCov.status, "fail");
+    assert.equal(pyCov.pct, 50);
+  } finally {
+    fs.rmSync(pyRepo, { recursive: true, force: true });
+  }
+
+  // 3. Go coverprofile
+  const goRepo = fs.mkdtempSync(path.join(os.tmpdir(), "sc-gate-gocov-"));
+  try {
+    git(goRepo, ["init"]);
+    git(goRepo, ["config", "user.email", "go@example.com"]);
+    git(goRepo, ["config", "user.name", "Go Tester"]);
+    fs.writeFileSync(path.join(goRepo, "go.mod"), "module example.com/demo\n\ngo 1.22\n", "utf8");
+    fs.writeFileSync(path.join(goRepo, "calc.go"), "package demo\nfunc Add(a, b int) int { return a + b }\n", "utf8");
+    git(goRepo, ["add", "."]);
+    git(goRepo, ["commit", "-m", "init"]);
+    fs.writeFileSync(
+      path.join(goRepo, "calc.go"),
+      "package demo\nfunc Add(a, b int) int { return a + b }\nfunc Sub(a, b int) int {\n\treturn a - b\n}\n",
+      "utf8"
+    );
+    fs.mkdirSync(path.join(goRepo, "coverage"), { recursive: true });
+    fs.writeFileSync(
+      path.join(goRepo, "coverage", "coverage.out"),
+      "mode: set\nexample.com/demo/calc.go:3.1,5.2 1 1\n",
+      "utf8"
+    );
+    const goCov = evaluateChangedLinesCoverage(goRepo, ["calc.go"], { threshold: 80 });
+    assert.equal(goCov.runner, "go");
+    assert.equal(goCov.status, "pass");
+    assert.equal(goCov.pct, 100);
+  } finally {
+    fs.rmSync(goRepo, { recursive: true, force: true });
   }
 });

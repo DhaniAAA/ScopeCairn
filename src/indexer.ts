@@ -3,6 +3,19 @@ import path from "node:path";
 import { extractFile, testTarget } from "./extract/index.js";
 import { syncFileIndex } from "./retrieval/symbolIndex.js";
 import { evidenceOf, type RelationType, type ExtractedImport } from "./extract/types.js";
+import {
+  loadTsConfigForFile,
+  resolveTsPathCandidates,
+  resolveWorkspaceImportCandidates,
+  type TsConfigPaths,
+  type WorkspacePackage,
+} from "./workspace.js";
+
+export interface ModuleResolverContext {
+  repoRoot: string;
+  workspaces: WorkspacePackage[];
+  tsConfigCache: Map<string, TsConfigPaths | null>;
+}
 
 export interface IndexResult {
   symbols: number;
@@ -91,12 +104,65 @@ interface ResolvedModule {
   fileSymId: number;
 }
 
+function expandModuleCandidates(base: string): string[] {
+  const norm = base.replace(/\\/g, "/").replace(/^\.\//, "");
+  const out = [norm];
+  const jsExt = norm.match(/\.(js|mjs|cjs|jsx)$/);
+  if (jsExt) {
+    const stripped = norm.slice(0, -jsExt[0].length);
+    out.push(stripped, stripped + ".ts", stripped + ".tsx");
+  }
+  out.push(
+    norm + ".ts",
+    norm + ".tsx",
+    norm + ".js",
+    norm + ".jsx",
+    norm + ".py",
+    norm + "/index.ts",
+    norm + "/index.tsx",
+    norm + "/index.js"
+  );
+  return out;
+}
+
+function lookupFileSymbol(db: DatabaseSync, relPath: string): ResolvedModule | null {
+  const r = db.prepare(`SELECT id FROM files WHERE path = ?`).get(relPath) as
+    | { id: number }
+    | undefined;
+  if (!r) return null;
+  const s = db
+    .prepare(`SELECT id FROM symbols WHERE file_id = ? AND type = 'file'`)
+    .get(r.id) as { id: number } | undefined;
+  return s ? { fileId: r.id, fileSymId: s.id } : null;
+}
+
 function resolveModuleFile(
   db: DatabaseSync,
   fromRel: string,
-  spec: string
+  spec: string,
+  ctx?: ModuleResolverContext
 ): ResolvedModule | null {
   const dir = fromRel.includes("/") ? fromRel.slice(0, fromRel.lastIndexOf("/")) : "";
+
+  // 1. tsconfig.json `paths` & `baseUrl` serta workspace package imports
+  if (ctx && !spec.startsWith(".")) {
+    const customBases: string[] = [];
+    const tsCfg = loadTsConfigForFile(ctx.repoRoot, fromRel, ctx.tsConfigCache);
+    if (tsCfg) {
+      customBases.push(...resolveTsPathCandidates(tsCfg, spec));
+    }
+    if (ctx.workspaces.length > 0) {
+      customBases.push(...resolveWorkspaceImportCandidates(ctx.workspaces, spec));
+    }
+    for (const base of customBases) {
+      for (const c of expandModuleCandidates(base)) {
+        if (c === fromRel) continue;
+        const found = lookupFileSymbol(db, c);
+        if (found) return found;
+      }
+    }
+  }
+
   let normalizedSpec = spec;
   if (spec.startsWith("@/") || spec.startsWith("~/")) {
     normalizedSpec = spec.replace(/^[@~]\//, "src/");
@@ -106,39 +172,14 @@ function resolveModuleFile(
     ? path.posix.normalize((dir ? dir + "/" : "") + normalizedSpec)
     : normalizedSpec;
 
-  const bases = [joined];
+  const candidates = expandModuleCandidates(joined);
   if (normalizedSpec !== spec) {
-    bases.push(spec.replace(/^[@~]\//, ""));
-  }
-  const jsExt = joined.match(/\.(js|mjs|cjs|jsx)$/);
-  if (jsExt) {
-    const stripped = joined.slice(0, -(jsExt[0].length));
-    bases.push(stripped, stripped + ".ts", stripped + ".tsx");
-  }
-  const candidates = [
-    ...bases,
-    joined + ".ts",
-    joined + ".tsx",
-    joined + ".js",
-    joined + ".jsx",
-    joined + ".py",
-    joined + "/index.ts",
-    joined + "/index.js",
-  ];
-  if (normalizedSpec !== spec) {
-    const alt = spec.replace(/^[@~]\//, "");
-    candidates.push(alt + ".ts", alt + ".tsx", alt + ".js", alt + "/index.ts");
+    candidates.push(...expandModuleCandidates(spec.replace(/^[@~]\//, "")));
   }
   for (const c of candidates) {
-    const r = db
-      .prepare(`SELECT id FROM files WHERE path = ?`)
-      .get(c) as { id: number } | undefined;
-    if (r && c !== fromRel) {
-      const s = db
-        .prepare(`SELECT id FROM symbols WHERE file_id = ? AND type = 'file'`)
-        .get(r.id) as { id: number } | undefined;
-      if (s) return { fileId: r.id, fileSymId: s.id };
-    }
+    if (c === fromRel) continue;
+    const found = lookupFileSymbol(db, c);
+    if (found) return found;
   }
 
   // Non-relative import fallback (mis. Python module atau Go package)
@@ -163,10 +204,58 @@ function resolveModuleFile(
 function resolveModuleToFile(
   db: DatabaseSync,
   fromRel: string,
-  spec: string
+  spec: string,
+  ctx?: ModuleResolverContext
 ): number | null {
-  const res = resolveModuleFile(db, fromRel, spec);
+  const res = resolveModuleFile(db, fromRel, spec, ctx);
   return res ? res.fileSymId : null;
+}
+
+/**
+ * Cari simbol di file target atau melalui rantai barrel re-export (`EXPORTS`) hingga 3 hop.
+ */
+function resolveSymbolInModuleOrBarrel(
+  db: DatabaseSync,
+  startFileId: number,
+  symName: string,
+  allowedTypes?: string[]
+): number | null {
+  const typeClause =
+    allowedTypes && allowedTypes.length > 0
+      ? `type IN (${allowedTypes.map((t) => `'${t}'`).join(",")})`
+      : `type != 'file'`;
+  const direct = db
+    .prepare(`SELECT id FROM symbols WHERE file_id = ? AND name = ? AND ${typeClause} LIMIT 1`)
+    .get(startFileId, symName) as { id: number } | undefined;
+  if (direct) return direct.id;
+
+  const visitedFiles = new Set<number>([startFileId]);
+  let frontier = [startFileId];
+  for (let hop = 0; hop < 3 && frontier.length > 0; hop++) {
+    const nextFrontier: number[] = [];
+    for (const fid of frontier) {
+      const reExports = db
+        .prepare(
+          `SELECT reExportedSym.file_id AS nextFileId
+           FROM symbols barrelSym
+           JOIN relationships rel ON rel.source_id = barrelSym.id AND rel.relationship_type = 'EXPORTS'
+           JOIN symbols reExportedSym ON reExportedSym.id = rel.target_id
+           WHERE barrelSym.file_id = ? AND barrelSym.type = 'file'`
+        )
+        .all(fid) as { nextFileId: number }[];
+      for (const row of reExports) {
+        if (visitedFiles.has(row.nextFileId)) continue;
+        visitedFiles.add(row.nextFileId);
+        const found = db
+          .prepare(`SELECT id FROM symbols WHERE file_id = ? AND name = ? AND ${typeClause} LIMIT 1`)
+          .get(row.nextFileId, symName) as { id: number } | undefined;
+        if (found) return found.id;
+        nextFrontier.push(row.nextFileId);
+      }
+    }
+    frontier = nextFrontier;
+  }
+  return null;
 }
 
 // Re-index one file: re-insert its symbols, then relations (phase 2).
@@ -243,12 +332,46 @@ export function indexFileSymbols(
   return { extraction: ext, fileSym };
 }
 
+export function seedExportRelations(
+  db: DatabaseSync,
+  fileId: number,
+  relPath: string,
+  extraction: ReturnType<typeof extractFile>,
+  fileSym: number,
+  ctx?: ModuleResolverContext
+): void {
+  const srcDir = relPath.includes("/") ? relPath.slice(0, relPath.lastIndexOf("/")) : "";
+  const insRel = db.prepare(
+    `INSERT INTO relationships(source_id, target_id, relationship_type, weight, confidence, evidence)
+     VALUES (?, ?, 'EXPORTS', ?, ?, ?)`
+  );
+  db.prepare(
+    `DELETE FROM relationships WHERE source_id = ? AND relationship_type = 'EXPORTS'`
+  ).run(fileSym);
+  for (const r of extraction.relations) {
+    if (r.rel !== "EXPORTS") continue;
+    if (r.to.startsWith("export*:")) {
+      const target = resolveModuleToFile(db, relPath, r.to.slice(8), ctx);
+      if (target) {
+        insRel.run(fileSym, target, r.weight, r.confidence, evidenceOf("EXPORTS", r.confidence));
+      }
+      continue;
+    }
+    const target =
+      symbolIdInFile(db, fileId, r.to) ?? globalSymbolId(db, r.to, srcDir);
+    if (target && target !== fileSym) {
+      insRel.run(fileSym, target, r.weight, r.confidence, evidenceOf("EXPORTS", r.confidence));
+    }
+  }
+}
+
 export function indexFileRelations(
   db: DatabaseSync,
   fileId: number,
   relPath: string,
   extraction: ReturnType<typeof extractFile>,
-  fileSym: number
+  fileSym: number,
+  ctx?: ModuleResolverContext
 ): IndexResult {
   // Bersihkan edge OUTBOUND file ini dulu. Sebelumnya phase 1 melakukan
   // `DELETE FROM symbols WHERE file_id = ?` dan cascade ikut menghapus edge
@@ -304,7 +427,7 @@ export function indexFileRelations(
 
   for (const r of extraction.relations) {
     if (r.rel === "IMPORTS") {
-      const target = resolveModuleFile(db, relPath, r.to);
+      const target = resolveModuleFile(db, relPath, r.to, ctx);
       if (target && target.fileSymId !== fileSym) {
         importedFileIds.add(target.fileId);
         insRel.run(fileSym, target.fileSymId, "IMPORTS", r.weight, r.confidence, evidenceOf("IMPORTS", r.confidence));
@@ -314,7 +437,7 @@ export function indexFileRelations(
     }
     if (r.rel === "EXPORTS") {
       if (r.to.startsWith("export*:")) {
-        const target = resolveModuleToFile(db, relPath, r.to.slice(8));
+        const target = resolveModuleToFile(db, relPath, r.to.slice(8), ctx);
         if (target) {
           insRel.run(fileSym, target, "EXPORTS", r.weight, r.confidence, evidenceOf("EXPORTS", r.confidence));
           rels++;
@@ -335,24 +458,15 @@ export function indexFileRelations(
       let dst: number | null = null;
       if (localImports.has(r.to)) {
         const imp = localImports.get(r.to)!;
-        const targetMod = resolveModuleFile(db, relPath, imp.moduleSpecifier);
+        const targetMod = resolveModuleFile(db, relPath, imp.moduleSpecifier, ctx);
         if (targetMod) {
           const symName = imp.importedName === "default" || imp.importedName === "*" ? r.to : imp.importedName;
-          let sym = db
-            .prepare(`SELECT id FROM symbols WHERE file_id = ? AND name = ? AND type IN ('interface', 'type', 'class', 'model') LIMIT 1`)
-            .get(targetMod.fileId, symName) as { id: number } | undefined;
-          if (!sym) {
-            sym = db
-              .prepare(
-                `SELECT s.id FROM symbols s
-                 JOIN symbols barrelSym ON barrelSym.file_id = ? AND barrelSym.type = 'file'
-                 JOIN relationships rel ON rel.source_id = barrelSym.id AND rel.relationship_type = 'EXPORTS'
-                 JOIN symbols reExportedSym ON reExportedSym.id = rel.target_id AND reExportedSym.type = 'file'
-                 WHERE s.file_id = reExportedSym.file_id AND s.name = ? AND s.type IN ('interface', 'type', 'class', 'model') LIMIT 1`
-              )
-              .get(targetMod.fileId, symName) as { id: number } | undefined;
-          }
-          if (sym) dst = sym.id;
+          dst = resolveSymbolInModuleOrBarrel(db, targetMod.fileId, symName, [
+            "interface",
+            "type",
+            "class",
+            "model",
+          ]);
         }
       }
       if (!dst) {
@@ -391,14 +505,12 @@ export function indexFileRelations(
 
         if (localImports.has(r.receiverType)) {
           const imp = localImports.get(r.receiverType)!;
-          const targetMod = resolveModuleFile(db, relPath, imp.moduleSpecifier);
+          const targetMod = resolveModuleFile(db, relPath, imp.moduleSpecifier, ctx);
           if (targetMod) {
             typeFileId = targetMod.fileId;
             const symName = imp.importedName === "default" || imp.importedName === "*" ? r.receiverType : imp.importedName;
-            const sym = db
-              .prepare(`SELECT id FROM symbols WHERE file_id = ? AND name = ? LIMIT 1`)
-              .get(targetMod.fileId, symName) as { id: number } | undefined;
-            if (sym) typeSymId = sym.id;
+            const symId = resolveSymbolInModuleOrBarrel(db, targetMod.fileId, symName);
+            if (symId) typeSymId = symId;
           }
         }
         if (!typeFileId) {
@@ -471,13 +583,11 @@ export function indexFileRelations(
           }
         } else if (localImports.has(r.receiver)) {
           const imp = localImports.get(r.receiver)!;
-          const targetMod = resolveModuleFile(db, relPath, imp.moduleSpecifier);
+          const targetMod = resolveModuleFile(db, relPath, imp.moduleSpecifier, ctx);
           if (targetMod) {
-            const sym = db
-              .prepare(`SELECT id FROM symbols WHERE file_id = ? AND name = ? AND type != 'file' LIMIT 1`)
-              .get(targetMod.fileId, r.to) as { id: number } | undefined;
-            if (sym) {
-              dst = sym.id;
+            const symId = resolveSymbolInModuleOrBarrel(db, targetMod.fileId, r.to);
+            if (symId) {
+              dst = symId;
               conf = 0.95;
               ev = "EXTRACTED";
             }
@@ -499,25 +609,12 @@ export function indexFileRelations(
       // Level 2: Named import match
       if (!dst && localImports.has(r.to)) {
         const imp = localImports.get(r.to)!;
-        const targetMod = resolveModuleFile(db, relPath, imp.moduleSpecifier);
+        const targetMod = resolveModuleFile(db, relPath, imp.moduleSpecifier, ctx);
         if (targetMod) {
           const symName = imp.importedName === "default" || imp.importedName === "*" ? r.to : imp.importedName;
-          let sym = db
-            .prepare(`SELECT id FROM symbols WHERE file_id = ? AND name = ? AND type != 'file' LIMIT 1`)
-            .get(targetMod.fileId, symName) as { id: number } | undefined;
-          if (!sym) {
-            sym = db
-              .prepare(
-                `SELECT s.id FROM symbols s
-                 JOIN symbols barrelSym ON barrelSym.file_id = ? AND barrelSym.type = 'file'
-                 JOIN relationships rel ON rel.source_id = barrelSym.id AND rel.relationship_type = 'EXPORTS'
-                 JOIN symbols reExportedSym ON reExportedSym.id = rel.target_id AND reExportedSym.type = 'file'
-                 WHERE s.file_id = reExportedSym.file_id AND s.name = ? AND s.type != 'file' LIMIT 1`
-              )
-              .get(targetMod.fileId, symName) as { id: number } | undefined;
-          }
-          if (sym) {
-            dst = sym.id;
+          const symId = resolveSymbolInModuleOrBarrel(db, targetMod.fileId, symName);
+          if (symId) {
+            dst = symId;
             conf = 0.95;
             ev = "EXTRACTED";
           }
@@ -561,25 +658,12 @@ export function indexFileRelations(
     let conf = r.confidence;
     if (!dst && localImports.has(r.to)) {
       const imp = localImports.get(r.to)!;
-      const targetMod = resolveModuleFile(db, relPath, imp.moduleSpecifier);
+      const targetMod = resolveModuleFile(db, relPath, imp.moduleSpecifier, ctx);
       if (targetMod) {
         const symName = imp.importedName === "default" || imp.importedName === "*" ? r.to : imp.importedName;
-        let sym = db
-          .prepare(`SELECT id FROM symbols WHERE file_id = ? AND name = ? AND type != 'file' LIMIT 1`)
-          .get(targetMod.fileId, symName) as { id: number } | undefined;
-        if (!sym) {
-          sym = db
-            .prepare(
-              `SELECT s.id FROM symbols s
-               JOIN symbols barrelSym ON barrelSym.file_id = ? AND barrelSym.type = 'file'
-               JOIN relationships rel ON rel.source_id = barrelSym.id AND rel.relationship_type = 'EXPORTS'
-               JOIN symbols reExportedSym ON reExportedSym.id = rel.target_id AND reExportedSym.type = 'file'
-               WHERE s.file_id = reExportedSym.file_id AND s.name = ? AND s.type != 'file' LIMIT 1`
-            )
-            .get(targetMod.fileId, symName) as { id: number } | undefined;
-        }
-        if (sym) {
-          dst = sym.id;
+        const symId = resolveSymbolInModuleOrBarrel(db, targetMod.fileId, symName);
+        if (symId) {
+          dst = symId;
           conf = 0.95;
         }
       }

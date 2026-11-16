@@ -7,7 +7,9 @@ import { isTestPath } from "../retrieval/retrieve.js";
 import { isSourceFile } from "../languages.js";
 import { loadConfig } from "../retrieval/config.js";
 
-export type SupportedGateRunner = "vitest" | "jest" | "unsupported";
+import { fileURLToPath } from "node:url";
+
+export type SupportedGateRunner = "vitest" | "jest" | "node" | "pytest" | "go" | "unsupported";
 
 export type WeakenedTestKind = "assertion_removed" | "skip_added" | "matcher_loosened";
 
@@ -78,7 +80,7 @@ export const BYPASS_LIMITATION_NOTE =
   "Keterbatasan hook lokal: agen dapat memakai `git commit --no-verify` untuk melewati pre-commit hook. Jalankan pemeriksaan yang sama secara wajib di CI: `scopecairn verify --test-gate --base origin/main`.";
 
 /**
- * Deteksi test runner yang didukung gerbang testing (mulai dari Vitest dan Jest saja).
+ * Deteksi test runner yang didukung gerbang testing (Vitest, Jest, Node test runner, pytest, Go).
  */
 export function detectGateRunner(repoRoot: string): SupportedGateRunner {
   const vitestConfigs = [
@@ -107,6 +109,7 @@ export function detectGateRunner(repoRoot: string): SupportedGateRunner {
       const testScript = pkg.scripts?.test ?? "";
       if (/\bvitest\b/.test(testScript)) return "vitest";
       if (/\bjest\b/.test(testScript)) return "jest";
+      if (/\b(?:node|tsx)\s+[^\n]*--test\b/.test(testScript)) return "node";
 
       const deps = { ...pkg.dependencies, ...pkg.devDependencies };
       if (deps["vitest"]) return "vitest";
@@ -121,6 +124,22 @@ export function detectGateRunner(repoRoot: string): SupportedGateRunner {
   }
   for (const c of jestConfigs) {
     if (fs.existsSync(path.join(repoRoot, c))) return "jest";
+  }
+
+  if (fs.existsSync(path.join(repoRoot, "pytest.ini")) || fs.existsSync(path.join(repoRoot, "conftest.py"))) {
+    return "pytest";
+  }
+  const pyprojectPath = path.join(repoRoot, "pyproject.toml");
+  if (fs.existsSync(pyprojectPath)) {
+    try {
+      const raw = fs.readFileSync(pyprojectPath, "utf8");
+      if (/\bpytest\b/i.test(raw)) return "pytest";
+    } catch {
+      // ignore
+    }
+  }
+  if (fs.existsSync(path.join(repoRoot, "go.mod"))) {
+    return "go";
   }
 
   return "unsupported";
@@ -243,83 +262,284 @@ function normalizeRepoRel(repoRoot: string, rawFilePath: string): string {
   return rawFilePath.replace(/\\/g, "/").replace(/^\.\//, "");
 }
 
-/**
- * Baca laporan coverage standar dari Vitest / Jest:
- * 1. `coverage/coverage-final.json` (Istanbul JSON: `l` atau `statementMap` + `s`)
- * 2. `coverage/lcov.info` (LCOV: `SF:` + `DA:<line>,<hits>`)
- */
-export function parseCoverageReport(repoRoot: string): Map<string, Map<number, number>> | null {
-  const jsonPath = path.join(repoRoot, "coverage", "coverage-final.json");
-  if (fs.existsSync(jsonPath)) {
-    try {
-      const raw = JSON.parse(fs.readFileSync(jsonPath, "utf8")) as Record<
-        string,
-        {
-          path?: string;
-          l?: Record<string, number>;
-          statementMap?: Record<
-            string,
-            { start?: { line?: number }; end?: { line?: number } }
-          >;
-          s?: Record<string, number>;
+function parseIstanbulCoverage(
+  repoRoot: string,
+  jsonPath: string
+): Map<string, Map<number, number>> | null {
+  if (!fs.existsSync(jsonPath)) return null;
+  try {
+    const raw = JSON.parse(fs.readFileSync(jsonPath, "utf8")) as Record<
+      string,
+      {
+        path?: string;
+        l?: Record<string, number>;
+        statementMap?: Record<string, { start?: { line?: number }; end?: { line?: number } }>;
+        s?: Record<string, number>;
+      }
+    >;
+    const fileMap = new Map<string, Map<number, number>>();
+    for (const [key, entry] of Object.entries(raw)) {
+      const rel = normalizeRepoRel(repoRoot, entry.path ?? key);
+      const lineHits = new Map<number, number>();
+      if (entry.l && typeof entry.l === "object") {
+        for (const [lnStr, hits] of Object.entries(entry.l)) {
+          const ln = Number.parseInt(lnStr, 10);
+          if (Number.isFinite(ln)) lineHits.set(ln, Number(hits) || 0);
         }
-      >;
-      const fileMap = new Map<string, Map<number, number>>();
-      for (const [key, entry] of Object.entries(raw)) {
-        const rel = normalizeRepoRel(repoRoot, entry.path ?? key);
-        const lineHits = new Map<number, number>();
-        if (entry.l && typeof entry.l === "object") {
-          for (const [lnStr, hits] of Object.entries(entry.l)) {
-            const ln = Number.parseInt(lnStr, 10);
-            if (Number.isFinite(ln)) lineHits.set(ln, Number(hits) || 0);
+      } else if (entry.statementMap && entry.s) {
+        for (const [stmtId, loc] of Object.entries(entry.statementMap)) {
+          const hits = Number(entry.s[stmtId] ?? 0);
+          const startLine = loc.start?.line;
+          const endLine = loc.end?.line ?? startLine;
+          if (startLine && endLine) {
+            for (let ln = startLine; ln <= endLine; ln++) {
+              const prev = lineHits.get(ln);
+              lineHits.set(ln, prev === undefined ? hits : Math.max(prev, hits));
+            }
           }
-        } else if (entry.statementMap && entry.s) {
-          for (const [stmtId, loc] of Object.entries(entry.statementMap)) {
-            const hits = Number(entry.s[stmtId] ?? 0);
-            const startLine = loc.start?.line;
-            const endLine = loc.end?.line ?? startLine;
-            if (startLine && endLine) {
+        }
+      }
+      fileMap.set(rel, lineHits);
+    }
+    return fileMap.size > 0 ? fileMap : null;
+  } catch {
+    return null;
+  }
+}
+
+function parseLcovCoverage(
+  repoRoot: string,
+  lcovPath: string
+): Map<string, Map<number, number>> | null {
+  if (!fs.existsSync(lcovPath)) return null;
+  try {
+    const content = fs.readFileSync(lcovPath, "utf8");
+    const fileMap = new Map<string, Map<number, number>>();
+    let currentRel: string | null = null;
+    for (const line of content.split(/\r?\n/)) {
+      const t = line.trim();
+      if (t.startsWith("SF:")) {
+        currentRel = normalizeRepoRel(repoRoot, t.slice(3).trim());
+        if (!fileMap.has(currentRel)) fileMap.set(currentRel, new Map());
+      } else if (t.startsWith("DA:") && currentRel) {
+        const parts = t.slice(3).split(",");
+        const ln = Number.parseInt(parts[0], 10);
+        const hits = Number.parseInt(parts[1] ?? "0", 10);
+        if (Number.isFinite(ln) && Number.isFinite(hits)) {
+          const prev = fileMap.get(currentRel)!.get(ln) ?? 0;
+          fileMap.get(currentRel)!.set(ln, Math.max(prev, hits));
+        }
+      } else if (t === "end_of_record") {
+        currentRel = null;
+      }
+    }
+    return fileMap.size > 0 ? fileMap : null;
+  } catch {
+    return null;
+  }
+}
+
+function buildLineStarts(text: string): number[] {
+  const starts = [0];
+  for (let i = 0; i < text.length; i++) {
+    if (text.charCodeAt(i) === 10) starts.push(i + 1);
+  }
+  return starts;
+}
+
+function offsetToLine(starts: number[], offset: number): number {
+  let lo = 0;
+  let hi = starts.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (starts[mid] <= offset) lo = mid + 1;
+    else hi = mid - 1;
+  }
+  return Math.max(1, hi + 1);
+}
+
+/**
+ * Parse V8 Coverage JSON (`NODE_V8_COVERAGE` / `c8` / `node --test`) dari direktori coverage.
+ */
+function parseV8Coverage(repoRoot: string): Map<string, Map<number, number>> | null {
+  const dirs = [
+    path.join(repoRoot, "coverage", "v8"),
+    path.join(repoRoot, "coverage", "tmp"),
+    path.join(repoRoot, "coverage"),
+  ];
+  const fileMap = new Map<string, Map<number, number>>();
+  const lineStartsCache = new Map<string, number[]>();
+
+  for (const dir of dirs) {
+    if (!fs.existsSync(dir)) continue;
+    let entries: string[];
+    try {
+      entries = fs.readdirSync(dir).filter((f) => f.endsWith(".json") && f !== "coverage-final.json");
+    } catch {
+      continue;
+    }
+    for (const file of entries) {
+      try {
+        const raw = JSON.parse(fs.readFileSync(path.join(dir, file), "utf8")) as {
+          result?: Array<{
+            url?: string;
+            functions?: Array<{
+              ranges?: Array<{ startOffset?: number; endOffset?: number; count?: number }>;
+            }>;
+          }>;
+        };
+        if (!Array.isArray(raw.result)) continue;
+        for (const script of raw.result) {
+          if (!script.url || !script.url.startsWith("file://")) continue;
+          let fsPath: string;
+          try {
+            fsPath = fileURLToPath(script.url);
+          } catch {
+            continue;
+          }
+          const rel = normalizeRepoRel(repoRoot, fsPath);
+          if (rel.startsWith("..") || rel.includes("node_modules/")) continue;
+          const abs = path.join(repoRoot, ...rel.split("/"));
+          if (!fs.existsSync(abs)) continue;
+          let starts = lineStartsCache.get(rel);
+          if (!starts) {
+            starts = buildLineStarts(fs.readFileSync(abs, "utf8"));
+            lineStartsCache.set(rel, starts);
+          }
+          let lineHits = fileMap.get(rel);
+          if (!lineHits) {
+            lineHits = new Map<number, number>();
+            fileMap.set(rel, lineHits);
+          }
+          for (const fn of script.functions ?? []) {
+            for (const r of fn.ranges ?? []) {
+              if (r.startOffset === undefined || r.endOffset === undefined) continue;
+              const startLine = offsetToLine(starts, r.startOffset);
+              const endLine = offsetToLine(starts, Math.max(r.startOffset, r.endOffset - 1));
+              const hits = Number(r.count ?? 0);
               for (let ln = startLine; ln <= endLine; ln++) {
                 const prev = lineHits.get(ln);
-                lineHits.set(ln, prev === undefined ? hits : Math.max(prev, hits));
+                // Rentang lebih sempit dengan hits 0 tidak menimpa eksekusi baris luar kecuali belum diset
+                if (prev === undefined) lineHits.set(ln, hits);
+                else if (hits > 0) lineHits.set(ln, Math.max(prev, hits));
               }
             }
           }
         }
-        fileMap.set(rel, lineHits);
+      } catch {
+        // ignore invalid v8 json
       }
-      return fileMap;
-    } catch {
-      // fall through to lcov
     }
   }
+  return fileMap.size > 0 ? fileMap : null;
+}
 
-  const lcovPath = path.join(repoRoot, "coverage", "lcov.info");
-  if (fs.existsSync(lcovPath)) {
-    try {
-      const content = fs.readFileSync(lcovPath, "utf8");
-      const fileMap = new Map<string, Map<number, number>>();
-      let currentRel: string | null = null;
-      for (const line of content.split(/\r?\n/)) {
-        const t = line.trim();
-        if (t.startsWith("SF:")) {
-          currentRel = normalizeRepoRel(repoRoot, t.slice(3).trim());
-          if (!fileMap.has(currentRel)) fileMap.set(currentRel, new Map());
-        } else if (t.startsWith("DA:") && currentRel) {
-          const parts = t.slice(3).split(",");
-          const ln = Number.parseInt(parts[0], 10);
-          const hits = Number.parseInt(parts[1] ?? "0", 10);
-          if (Number.isFinite(ln) && Number.isFinite(hits)) {
-            fileMap.get(currentRel)!.set(ln, hits);
+function parseCoberturaCoverage(
+  repoRoot: string,
+  xmlPath: string
+): Map<string, Map<number, number>> | null {
+  if (!fs.existsSync(xmlPath)) return null;
+  try {
+    const raw = fs.readFileSync(xmlPath, "utf8");
+    const fileMap = new Map<string, Map<number, number>>();
+    const classRe = /<class\b[^>]*filename=["']([^"']+)["'][^>]*>([\s\S]*?)<\/class>/g;
+    for (const cm of raw.matchAll(classRe)) {
+      const rel = normalizeRepoRel(repoRoot, cm[1]);
+      let lineHits = fileMap.get(rel);
+      if (!lineHits) {
+        lineHits = new Map<number, number>();
+        fileMap.set(rel, lineHits);
+      }
+      for (const lm of cm[2].matchAll(/<line\b([^>]+)\/?>/g)) {
+        const attrs = lm[1];
+        const numMatch = /\bnumber=["'](\d+)["']/.exec(attrs);
+        const hitsMatch = /\bhits=["'](\d+)["']/.exec(attrs);
+        if (!numMatch || !hitsMatch) continue;
+        const ln = Number.parseInt(numMatch[1], 10);
+        const hits = Number.parseInt(hitsMatch[1], 10);
+        const prev = lineHits.get(ln) ?? 0;
+        lineHits.set(ln, Math.max(prev, hits));
+      }
+    }
+    return fileMap.size > 0 ? fileMap : null;
+  } catch {
+    return null;
+  }
+}
+
+function parseGoCoverprofile(
+  repoRoot: string,
+  profilePath: string
+): Map<string, Map<number, number>> | null {
+  if (!fs.existsSync(profilePath)) return null;
+  try {
+    const raw = fs.readFileSync(profilePath, "utf8");
+    const fileMap = new Map<string, Map<number, number>>();
+    const lineRe = /^(.+):(\d+)\.\d+,(\d+)\.\d+\s+\d+\s+(\d+)$/;
+    for (const rawLine of raw.split(/\r?\n/)) {
+      const t = rawLine.trim();
+      if (!t || t.startsWith("mode:")) continue;
+      const m = lineRe.exec(t);
+      if (!m) continue;
+      let rel = normalizeRepoRel(repoRoot, m[1]);
+      if (!fs.existsSync(path.join(repoRoot, ...rel.split("/")))) {
+        // Strip module prefix e.g. github.com/org/repo/pkg/a.go -> pkg/a.go
+        const parts = m[1].replace(/\\/g, "/").split("/");
+        for (let i = 1; i < parts.length; i++) {
+          const sub = parts.slice(i).join("/");
+          if (fs.existsSync(path.join(repoRoot, ...sub.split("/")))) {
+            rel = sub;
+            break;
           }
-        } else if (t === "end_of_record") {
-          currentRel = null;
         }
       }
-      return fileMap;
-    } catch {
-      return null;
+      const startLine = Number.parseInt(m[2], 10);
+      const endLine = Number.parseInt(m[3], 10);
+      const count = Number.parseInt(m[4], 10);
+      let lineHits = fileMap.get(rel);
+      if (!lineHits) {
+        lineHits = new Map<number, number>();
+        fileMap.set(rel, lineHits);
+      }
+      for (let ln = startLine; ln <= endLine; ln++) {
+        const prev = lineHits.get(ln) ?? 0;
+        lineHits.set(ln, Math.max(prev, count));
+      }
     }
+    return fileMap.size > 0 ? fileMap : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Baca laporan coverage lintas bahasa & runner:
+ * 1. Istanbul JSON (`coverage/coverage-final.json`)
+ * 2. LCOV (`coverage/lcov.info`, `lcov.info`, `coverage/lcov/lcov.info`)
+ * 3. V8 Coverage JSON (`coverage/v8/*.json`, `coverage/tmp/*.json`, `coverage/*.json`)
+ * 4. Cobertura XML (`coverage/coverage.xml`, `coverage/cobertura-coverage.xml`, `coverage.xml`)
+ * 5. Go coverprofile (`coverage/coverage.out`, `coverage.out`)
+ */
+export function parseCoverageReport(repoRoot: string): Map<string, Map<number, number>> | null {
+  const istanbul = parseIstanbulCoverage(repoRoot, path.join(repoRoot, "coverage", "coverage-final.json"));
+  if (istanbul) return istanbul;
+
+  for (const rel of ["coverage/lcov.info", "lcov.info", "coverage/lcov/lcov.info"]) {
+    const lcov = parseLcovCoverage(repoRoot, path.join(repoRoot, ...rel.split("/")));
+    if (lcov) return lcov;
+  }
+
+  const v8 = parseV8Coverage(repoRoot);
+  if (v8) return v8;
+
+  for (const rel of ["coverage/coverage.xml", "coverage/cobertura-coverage.xml", "coverage.xml"]) {
+    const cob = parseCoberturaCoverage(repoRoot, path.join(repoRoot, ...rel.split("/")));
+    if (cob) return cob;
+  }
+
+  for (const rel of ["coverage/coverage.out", "coverage.out"]) {
+    const goCov = parseGoCoverprofile(repoRoot, path.join(repoRoot, ...rel.split("/")));
+    if (goCov) return goCov;
   }
 
   return null;
@@ -327,6 +547,62 @@ export function parseCoverageReport(repoRoot: string): Map<string, Map<number, n
 
 function npxBin(): string {
   return process.platform === "win32" ? "npx.cmd" : "npx";
+}
+
+function runRunnerCoverage(repoRoot: string, runner: SupportedGateRunner): void {
+  fs.mkdirSync(path.join(repoRoot, "coverage"), { recursive: true });
+  if (runner === "vitest") {
+    spawnSync(npxBin(), ["vitest", "run", "--coverage", "--coverage.reporter=json"], {
+      cwd: repoRoot,
+      stdio: "ignore",
+      shell: false,
+      timeout: 60000,
+    });
+  } else if (runner === "jest") {
+    spawnSync(npxBin(), ["jest", "--coverage", "--coverageReporters=json"], {
+      cwd: repoRoot,
+      stdio: "ignore",
+      shell: false,
+      timeout: 60000,
+    });
+  } else if (runner === "node") {
+    let usesTsx = false;
+    try {
+      const pkg = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8")) as {
+        scripts?: Record<string, string>;
+      };
+      usesTsx = /\btsx\b/.test(pkg.scripts?.test ?? "");
+    } catch {
+      usesTsx = false;
+    }
+    const args = [
+      "--test",
+      "--experimental-test-coverage",
+      "--test-reporter=lcov",
+      "--test-reporter-destination=coverage/lcov.info",
+      ...(usesTsx ? ["--import", "tsx"] : []),
+    ];
+    spawnSync(process.execPath, args, {
+      cwd: repoRoot,
+      stdio: "ignore",
+      shell: false,
+      timeout: 60000,
+    });
+  } else if (runner === "pytest") {
+    spawnSync("pytest", ["--cov", "--cov-report=xml:coverage/coverage.xml"], {
+      cwd: repoRoot,
+      stdio: "ignore",
+      shell: false,
+      timeout: 60000,
+    });
+  } else if (runner === "go") {
+    spawnSync("go", ["test", "-coverprofile=coverage/coverage.out", "./..."], {
+      cwd: repoRoot,
+      stdio: "ignore",
+      shell: false,
+      timeout: 60000,
+    });
+  }
 }
 
 export function evaluateChangedLinesCoverage(
@@ -351,12 +627,8 @@ export function evaluateChangedLinesCoverage(
     };
   }
 
-  if (opts.runCoverage && (runner === "vitest" || runner === "jest")) {
-    const args =
-      runner === "vitest"
-        ? ["vitest", "run", "--coverage", "--coverage.reporter=json"]
-        : ["jest", "--coverage", "--coverageReporters=json"];
-    spawnSync(npxBin(), args, { cwd: repoRoot, stdio: "ignore", shell: false, timeout: 60000 });
+  if (opts.runCoverage && runner !== "unsupported") {
+    runRunnerCoverage(repoRoot, runner);
   }
 
   const coverageMap = parseCoverageReport(repoRoot);
@@ -371,7 +643,7 @@ export function evaluateChangedLinesCoverage(
         pct: 0,
         files: [],
         reason:
-          "Runner belum didukung oleh gerbang coverage otomatis (saat ini mendukung Vitest dan Jest).",
+          "Runner belum terdeteksi otomatis dan laporan coverage (Istanbul/LCOV/V8/Cobertura/Go) tidak ditemukan.",
       };
     }
     return {
@@ -382,7 +654,7 @@ export function evaluateChangedLinesCoverage(
       totalLines: 0,
       pct: 0,
       files: [],
-      reason: `Laporan coverage ${runner} belum ditemukan di coverage/coverage-final.json atau coverage/lcov.info (jalankan ${runner} dengan --coverage).`,
+      reason: `Laporan coverage ${runner} belum ditemukan (Istanbul JSON, LCOV, V8 JSON, Cobertura XML, atau Go coverprofile). Jalankan dengan --run-coverage atau hasilkan laporan coverage lebih dulu.`,
     };
   }
 
@@ -485,9 +757,9 @@ export function detectWeakenedTestsFromDiff(
     });
   }
 
-  // 2. Deteksi skip / todo ditambahkan
+  // 2. Deteksi skip / todo ditambahkan (JS/TS, Python pytest, Go testing)
   const skipRe =
-    /\b(?:it|test|describe)\.skip\s*\(|\b(?:xit|xtest|xdescribe)\s*\(|\b(?:it|test)\.todo\s*\(|\{\s*skip\s*:\s*true\b/g;
+    /\b(?:it|test|describe)\.skip\s*\(|\b(?:xit|xtest|xdescribe)\s*\(|\b(?:it|test)\.todo\s*\(|\{\s*skip\s*:\s*true\b|@pytest\.mark\.skip\b|\bt\.Skip\s*\(/g;
   const removedSkips = countRegexMatches(removedText, skipRe);
   const addedSkips = countRegexMatches(addedText, skipRe);
   if (addedSkips > removedSkips) {

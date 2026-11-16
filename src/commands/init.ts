@@ -17,6 +17,9 @@ export const CI_WORKFLOW_REL = ".github/workflows/scopecairn.yml";
 
 export const CI_WORKFLOW_TEMPLATE = `name: ScopeCairn Verify
 on: [push, pull_request]
+permissions:
+  contents: read
+  security-events: write
 jobs:
   verify:
     runs-on: ubuntu-latest
@@ -26,9 +29,19 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
       - run: npm install -g scopecairn@latest
-      - run: scopecairn verify --test-gate --base origin/main
+      - name: Generate ScopeCairn SARIF report
+        id: sarif
+        continue-on-error: true
+        run: scopecairn verify --test-gate --pr-risk --sarif --base origin/main > scopecairn.sarif
+      - name: Upload SARIF to GitHub Security
+        if: always() && hashFiles('scopecairn.sarif') != ''
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: scopecairn.sarif
+      - name: Enforce ScopeCairn gate
+        run: scopecairn verify --test-gate --base origin/main
 `;
 
 export const HOOK_MARKER_START = "# scopecairn:managed-hook";

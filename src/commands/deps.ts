@@ -5,6 +5,7 @@ import { openDb } from "../db.js";
 import { logInvocation } from "../invocations.js";
 import { refreshIndex } from "../refresh.js";
 import { skipRefresh } from "./opts.js";
+import { discoverWorkspaces } from "../workspace.js";
 
 export type DepEcosystem = "npm" | "python" | "go" | "rust";
 
@@ -13,6 +14,7 @@ export interface DepEntry {
   ecosystem: DepEcosystem;
   version: string;
   scope: string;
+  package?: string;
   used: boolean;
   evidence: string;
 }
@@ -43,9 +45,8 @@ function readText(p: string): string | null {
   }
 }
 
-function parsePackageJson(repoRoot: string): DepEntry[] {
-  const p = path.join(repoRoot, "package.json");
-  const raw = readText(p);
+function parsePackageJsonAt(pkgPath: string, pkgDir?: string): DepEntry[] {
+  const raw = readText(pkgPath);
   if (!raw) return [];
   const out: DepEntry[] = [];
   try {
@@ -61,7 +62,15 @@ function parsePackageJson(repoRoot: string): DepEntry[] {
       if (!map || typeof map !== "object") continue;
       for (const [name, version] of Object.entries(map)) {
         if (typeof version !== "string") continue;
-        out.push({ name, ecosystem: "npm", version, scope, used: false, evidence: "" });
+        out.push({
+          name,
+          ecosystem: "npm",
+          version,
+          scope,
+          ...(pkgDir ? { package: pkgDir } : {}),
+          used: false,
+          evidence: "",
+        });
       }
     }
   } catch {
@@ -118,8 +127,7 @@ function parsePyproject(repoRoot: string): DepEntry[] {
   return out;
 }
 
-function parseGoMod(repoRoot: string): DepEntry[] {
-  const p = path.join(repoRoot, "go.mod");
+function parseGoModAt(p: string, pkgDir?: string): DepEntry[] {
   const raw = readText(p);
   if (!raw) return [];
   const out: DepEntry[] = [];
@@ -128,7 +136,15 @@ function parseGoMod(repoRoot: string): DepEntry[] {
     const n = name.trim();
     if (!n || seen.has(n)) return;
     seen.add(n);
-    out.push({ name: n, ecosystem: "go", version, scope: "require", used: false, evidence: "" });
+    out.push({
+      name: n,
+      ecosystem: "go",
+      version,
+      scope: "require",
+      ...(pkgDir ? { package: pkgDir } : {}),
+      used: false,
+      evidence: "",
+    });
   };
   for (const m of raw.matchAll(/require\s*\(([\s\S]*?)\)/g)) {
     for (const line of m[1].split("\n")) {
@@ -146,8 +162,7 @@ function parseGoMod(repoRoot: string): DepEntry[] {
   return out;
 }
 
-function parseCargoToml(repoRoot: string): DepEntry[] {
-  const p = path.join(repoRoot, "Cargo.toml");
+function parseCargoTomlAt(p: string, pkgDir?: string): DepEntry[] {
   const raw = readText(p);
   if (!raw) return [];
   const out: DepEntry[] = [];
@@ -155,12 +170,19 @@ function parseCargoToml(repoRoot: string): DepEntry[] {
   const push = (name: string, version: string, scope: string) => {
     const n = name.trim();
     if (!n) return;
-    // skip manifest helpers (package lookups) — hanya crate deps
     if (n === "python" || n === "version" || n === "edition" || n === "rust-version") return;
     const key = `${scope}:${n}`;
     if (seen.has(key)) return;
     seen.add(key);
-    out.push({ name: n, ecosystem: "rust", version, scope, used: false, evidence: "" });
+    out.push({
+      name: n,
+      ecosystem: "rust",
+      version,
+      scope,
+      ...(pkgDir ? { package: pkgDir } : {}),
+      used: false,
+      evidence: "",
+    });
   };
   const sections: Array<[RegExp, string]> = [
     [/^\[dependencies\]\s*$/gm, "dependencies"],
@@ -200,10 +222,10 @@ export function parseManifests(repoRoot: string): { manifests: string[]; deps: D
   const manifests: string[] = [];
   const deps: DepEntry[] = [];
   const candidates: Array<[string, () => DepEntry[]]> = [
-    ["package.json", () => parsePackageJson(repoRoot)],
+    ["package.json", () => parsePackageJsonAt(path.join(repoRoot, "package.json"))],
     ["pyproject.toml", () => parsePyproject(repoRoot)],
-    ["go.mod", () => parseGoMod(repoRoot)],
-    ["Cargo.toml", () => parseCargoToml(repoRoot)],
+    ["go.mod", () => parseGoModAt(path.join(repoRoot, "go.mod"))],
+    ["Cargo.toml", () => parseCargoTomlAt(path.join(repoRoot, "Cargo.toml"))],
   ];
   for (const [name, fn] of candidates) {
     if (fs.existsSync(path.join(repoRoot, name))) {
@@ -211,8 +233,24 @@ export function parseManifests(repoRoot: string): { manifests: string[]; deps: D
       deps.push(...fn());
     }
   }
-  // Deterministik: urut ecosystem + nama agar output stabil & mudah difilter.
-  deps.sort((a, b) => a.ecosystem.localeCompare(b.ecosystem) || a.name.localeCompare(b.name));
+
+  for (const ws of discoverWorkspaces(repoRoot)) {
+    if (manifests.includes(ws.manifestRel)) continue;
+    const abs = path.join(repoRoot, ...ws.manifestRel.split("/"));
+    if (!fs.existsSync(abs)) continue;
+    manifests.push(ws.manifestRel);
+    if (ws.ecosystem === "npm") deps.push(...parsePackageJsonAt(abs, ws.dir));
+    else if (ws.ecosystem === "go") deps.push(...parseGoModAt(abs, ws.dir));
+    else if (ws.ecosystem === "rust") deps.push(...parseCargoTomlAt(abs, ws.dir));
+  }
+
+  // Deterministik: urut ecosystem + package + nama agar output stabil & mudah difilter.
+  deps.sort(
+    (a, b) =>
+      a.ecosystem.localeCompare(b.ecosystem) ||
+      (a.package ?? "").localeCompare(b.package ?? "") ||
+      a.name.localeCompare(b.name)
+  );
   return { manifests, deps };
 }
 
@@ -245,7 +283,9 @@ function depSearchTerms(dep: DepEntry): string[] {
   return [...terms];
 }
 
-/** Baca isi file terindeks (berdasar DB `files`) untuk pencocokan import. */
+const MANIFEST_BASENAMES = new Set(["package.json", "pyproject.toml", "go.mod", "Cargo.toml"]);
+
+/** Baca isi file terindeks (berdasar DB `files`), kecuali manifest agar tidak self-match. */
 function loadIndexedContents(
   db: DatabaseSync,
   repoRoot: string,
@@ -255,9 +295,12 @@ function loadIndexedContents(
   try {
     const rows = db.prepare(`SELECT path FROM files`).all() as { path: string }[];
     for (const r of rows.slice(0, limitFiles)) {
-      const abs = path.join(repoRoot, ...r.path.replace(/\\/g, "/").split("/"));
+      const norm = r.path.replace(/\\/g, "/");
+      const base = norm.split("/").pop() ?? norm;
+      if (MANIFEST_BASENAMES.has(base)) continue;
+      const abs = path.join(repoRoot, ...norm.split("/"));
       const content = readText(abs);
-      if (content !== null) out.set(r.path.replace(/\\/g, "/"), content);
+      if (content !== null) out.set(norm, content);
     }
   } catch {
     // DB kosong / skema lama — fallback kosong, deteksi hanya dari DB.
@@ -271,25 +314,47 @@ export function checkDepUsed(
   contents?: Map<string, string>
 ): { used: boolean; evidence: string } {
   const terms = depSearchTerms(dep);
+  const pkgPrefix = dep.package ? `${dep.package}/` : null;
 
-  // 1. Cek DB: symbols (name/signature LIKE) — IMPORTS tersimpan di
-  // relationships; eksternal yang tak ter-resolve tidak ada di DB sehingga
-  // langkah 2 (file-scan) wajib ada agar tidak semua dep ditandai unused.
+  // 1. Cek DB: symbols (name/signature LIKE) & IMPORTS.
+  // Pada monorepo workspace, batasi pencarian ke file di dalam paket tersebut.
   try {
     for (const term of terms) {
       const pat = `%${escapeLike(term)}%`;
-      const symHit = db
-        .prepare(`SELECT COUNT(*) AS n FROM symbols WHERE name LIKE ? ESCAPE '\\' OR signature LIKE ? ESCAPE '\\'`)
-        .get(pat, pat) as { n: number };
-      if (symHit.n > 0) return { used: true, evidence: "EXTRACTED (symbols LIKE)" };
-      const relHit = db
-        .prepare(
-          `SELECT COUNT(*) AS n FROM relationships r
-           JOIN symbols t ON t.id = r.target_id
-           WHERE r.relationship_type = 'IMPORTS' AND r.evidence = 'EXTRACTED' AND t.name LIKE ? ESCAPE '\\'`
-        )
-        .get(pat) as { n: number };
-      if (relHit.n > 0) return { used: true, evidence: "EXTRACTED (IMPORTS)" };
+      if (pkgPrefix) {
+        const pkgPat = `${escapeLike(pkgPrefix)}%`;
+        const symHit = db
+          .prepare(
+            `SELECT COUNT(*) AS n FROM symbols s JOIN files f ON f.id = s.file_id
+             WHERE f.path LIKE ? ESCAPE '\\' AND (s.name LIKE ? ESCAPE '\\' OR s.signature LIKE ? ESCAPE '\\')`
+          )
+          .get(pkgPat, pat, pat) as { n: number };
+        if (symHit.n > 0) return { used: true, evidence: `EXTRACTED (symbols LIKE in ${dep.package})` };
+        const relHit = db
+          .prepare(
+            `SELECT COUNT(*) AS n FROM relationships r
+             JOIN symbols s ON s.id = r.source_id
+             JOIN files sf ON sf.id = s.file_id
+             JOIN symbols t ON t.id = r.target_id
+             WHERE sf.path LIKE ? ESCAPE '\\'
+               AND r.relationship_type = 'IMPORTS' AND r.evidence = 'EXTRACTED' AND t.name LIKE ? ESCAPE '\\'`
+          )
+          .get(pkgPat, pat) as { n: number };
+        if (relHit.n > 0) return { used: true, evidence: `EXTRACTED (IMPORTS in ${dep.package})` };
+      } else {
+        const symHit = db
+          .prepare(`SELECT COUNT(*) AS n FROM symbols WHERE name LIKE ? ESCAPE '\\' OR signature LIKE ? ESCAPE '\\'`)
+          .get(pat, pat) as { n: number };
+        if (symHit.n > 0) return { used: true, evidence: "EXTRACTED (symbols LIKE)" };
+        const relHit = db
+          .prepare(
+            `SELECT COUNT(*) AS n FROM relationships r
+             JOIN symbols t ON t.id = r.target_id
+             WHERE r.relationship_type = 'IMPORTS' AND r.evidence = 'EXTRACTED' AND t.name LIKE ? ESCAPE '\\'`
+          )
+          .get(pat) as { n: number };
+        if (relHit.n > 0) return { used: true, evidence: "EXTRACTED (IMPORTS)" };
+      }
     }
   } catch {
     // abaikan — lanjut ke file-scan
@@ -298,10 +363,14 @@ export function checkDepUsed(
   // 2. File-scan offline: cari import/require/use string dep di file terindeks.
   if (contents && contents.size > 0) {
     for (const term of terms) {
-      const re = new RegExp(`\\b${escapeRegExp(term)}\\b`);
-      for (const content of contents.values()) {
+      const re = new RegExp(`(?:^|[^A-Za-z0-9_-])${escapeRegExp(term)}(?:[^A-Za-z0-9_-]|$)`);
+      for (const [filePath, content] of contents.entries()) {
+        if (pkgPrefix && !filePath.startsWith(pkgPrefix)) continue;
         if (re.test(content)) {
-          return { used: true, evidence: "file-scan (import string)" };
+          return {
+            used: true,
+            evidence: pkgPrefix ? `file-scan (${dep.package})` : "file-scan (import string)",
+          };
         }
       }
     }
@@ -339,8 +408,9 @@ function formatTable(res: DepsResult): string {
   lines.push(`| Dep | Ecosystem | Scope | Version | Status |`);
   lines.push(`|---|---|---|---|---|`);
   for (const d of res.deps) {
+    const scopeLabel = d.package ? `${d.scope} (${d.package})` : d.scope;
     lines.push(
-      `| ${d.name} | ${d.ecosystem} | ${d.scope} | ${d.version || "-"} | ${d.used ? "used" : "unused"} |`
+      `| ${d.name} | ${d.ecosystem} | ${scopeLabel} | ${d.version || "-"} | ${d.used ? "used" : "unused"} |`
     );
   }
   const unused = res.deps.filter((d) => !d.used);
@@ -348,7 +418,8 @@ function formatTable(res: DepsResult): string {
     lines.push(``);
     lines.push(`## Unused candidates (${unused.length})`);
     for (const d of unused) {
-      lines.push(`- ${d.name} (${d.ecosystem}, ${d.scope}) — evidence: ${d.evidence}`);
+      const pkgSuffix = d.package ? `, ${d.package}` : "";
+      lines.push(`- ${d.name} (${d.ecosystem}, ${d.scope}${pkgSuffix}) — evidence: ${d.evidence}`);
     }
   }
   return lines.join("\n");

@@ -13,6 +13,7 @@ export interface StatusOptions {
   dashboard?: boolean;
   usage?: boolean;
   out?: string;
+  json?: boolean;
 }
 
 export async function cmdStatus(repoRoot: string, opts: StatusOptions = {}): Promise<void> {
@@ -27,6 +28,10 @@ export async function cmdStatus(repoRoot: string, opts: StatusOptions = {}): Pro
 
   const dir = dataDir(repoRoot);
   if (!fs.existsSync(path.join(dir, "scopecairn.db"))) {
+    if (opts.json) {
+      console.log(JSON.stringify({ initialized: false, index: dbPath(repoRoot) }, null, 2));
+      return;
+    }
     console.log("ScopeCairn");
     console.log("Status: NOT INITIALIZED (run `scopecairn scan`)");
     return;
@@ -34,7 +39,12 @@ export async function cmdStatus(repoRoot: string, opts: StatusOptions = {}): Pro
   const db = openDb(repoRoot);
   try {
     if (opts.usage) {
-      console.log(renderUsage(collectUsage(db)));
+      const usage = collectUsage(db);
+      if (opts.json) {
+        console.log(JSON.stringify(usage, null, 2));
+      } else {
+        console.log(renderUsage(usage));
+      }
       return;
     }
     const files = (db.prepare(`SELECT COUNT(*) AS n FROM files`).get() as { n: number }).n;
@@ -45,6 +55,67 @@ export async function cmdStatus(repoRoot: string, opts: StatusOptions = {}): Pro
       (db.prepare(`SELECT value FROM meta WHERE key = 'last_scan'`).get() as
         | { value: string }
         | undefined)?.value ?? "-";
+
+    if (opts.json) {
+      const safeCount = (sql: string): number | null => {
+        try {
+          return (db.prepare(sql).get() as { n: number }).n;
+        } catch {
+          return null;
+        }
+      };
+      let scanDelta: Record<string, number> | null = null;
+      try {
+        const deltaRow = db.prepare(`SELECT value FROM meta WHERE key = 'last_scan_delta'`).get() as
+          | { value: string }
+          | undefined;
+        if (deltaRow) scanDelta = JSON.parse(deltaRow.value) as Record<string, number>;
+      } catch {
+        scanDelta = null;
+      }
+      let adapters: string[] = [];
+      try {
+        const paths = (db.prepare(`SELECT path FROM files`).all() as { path: string }[]).map((r) => r.path);
+        adapters = detectAdapters(paths, repoRoot).map((a) => a.id);
+      } catch {
+        adapters = [];
+      }
+      let invocations: { command: string; n: number }[] = [];
+      try {
+        invocations = db
+          .prepare(`SELECT command, COUNT(*) AS n FROM invocations GROUP BY command ORDER BY n DESC`)
+          .all() as { command: string; n: number }[];
+      } catch {
+        invocations = [];
+      }
+      console.log(
+        JSON.stringify(
+          {
+            initialized: true,
+            index: dbPath(repoRoot),
+            files,
+            byLanguage: byLang,
+            symbols: safeCount(`SELECT COUNT(*) AS n FROM symbols`),
+            relationships: safeCount(`SELECT COUNT(*) AS n FROM relationships`),
+            ftsRows: safeCount(`SELECT COUNT(*) AS n FROM symbol_index`),
+            lastScan,
+            scanDelta,
+            cache: {
+              fanin: safeCount(`SELECT COUNT(*) AS n FROM fanin`),
+              nodeMetrics: safeCount(`SELECT COUNT(*) AS n FROM node_metrics`),
+              cycles: safeCount(`SELECT COUNT(*) AS n FROM cycles`),
+            },
+            commits: safeCount(`SELECT COUNT(*) AS n FROM commits`),
+            verifiedTasks: safeCount(`SELECT COUNT(*) AS n FROM verified_tasks`),
+            adapters,
+            invocations,
+          },
+          null,
+          2
+        )
+      );
+      return;
+    }
     console.log("ScopeCairn");
     console.log(`Index: ${dbPath(repoRoot)}`);
     console.log(`Files indexed: ${files}`);

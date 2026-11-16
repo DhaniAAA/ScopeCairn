@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.17.0 (2026-11-16)
+
+- feat: add DevSecOps SARIF/secrets, universal test-gate, monorepo/paths, real LSP, and CI hardening (fd5763f)
+
 ## 0.16.1 (2026-11-07)
 
 - fix: make dogfooding reuse/dead tests self-contained (scan before search) (7a8eb85)

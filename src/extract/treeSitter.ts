@@ -289,7 +289,7 @@ function extractCustomTypes(node: Node | null | undefined): string[] {
 }
 
 function parseJsDocParams(doc: string): string[] {
-  if (!doc || !doc.includes("@param")) return [];
+  if (!doc?.includes("@param")) return [];
   const out: string[] = [];
   const re = /@param\s+(?:\{([^}]+)\}\s*)?([A-Za-z_$][A-Za-z0-9_$]*)/g;
   let m: RegExpExecArray | null;
@@ -565,7 +565,7 @@ export function extractSyntaxTree(relPath: string, source: string): FileExtracti
         const callee = node.childForFieldName("function") ?? node.childForFieldName("name") ?? children(node)[0];
         const method = !!callee && (callee.type.includes("member") || callee.type.includes("selector") || callee.type.includes("attribute") || callee.type.includes("field"));
         let target: string | null = null;
-        let receiver: string | undefined = undefined;
+        let receiver: string | undefined;
         if (callee) {
           if (method) {
             target = identifier(callee.childForFieldName("property") ?? callee.childForFieldName("field") ?? callee.childForFieldName("attribute") ?? children(callee).at(-1) ?? null);
@@ -579,7 +579,7 @@ export function extractSyntaxTree(relPath: string, source: string): FileExtracti
           }
         }
         if (target) {
-          let receiverType: string | undefined = undefined;
+          let receiverType: string | undefined;
           if (receiver && childScope.has(receiver)) {
             receiverType = childScope.get(receiver);
           }
@@ -587,7 +587,7 @@ export function extractSyntaxTree(relPath: string, source: string): FileExtracti
             from: owner,
             to: target,
             rel: "CALLS",
-            weight: WEIGHT["CALLS"],
+            weight: WEIGHT.CALLS,
             confidence: method ? (receiverType ? 0.95 : 0.6) : 0.8,
             methodCall: method,
             ...(receiver ? { receiver } : {}),

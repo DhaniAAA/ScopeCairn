@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 
 /** Decode path yang di-quote git (escape C: \\, \", dan oktal \NNN byte UTF-8). */
 function decodeGitPath(raw: string): string {
-  let p = raw.trim();
+  const p = raw.trim();
   if (!(p.startsWith('"') && p.endsWith('"'))) return p;
   const inner = p.slice(1, -1);
   const bytes: number[] = [];
@@ -201,4 +201,52 @@ export function gitDriftSince(repoRoot: string, savedHead: string | null): GitDr
     .sort((a, b) => a.localeCompare(b));
 
   return { currentHead, commitsSinceSave, changedFiles };
+}
+
+function gitRefExists(repoRoot: string, ref: string): boolean {
+  try {
+    execFileSync("git", ["show-ref", "--verify", "--quiet", ref], {
+      cwd: repoRoot,
+      timeout: 3000,
+      stdio: "ignore",
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Deteksi ref branch default repo secara otomatis (mis. `origin/master`,
+ * `origin/main`, atau fallback branch lokal) alih-alih mengasumsikan `origin/main`.
+ */
+export function detectDefaultBaseRef(
+  repoRoot: string,
+  opts: { preferOrigin?: boolean } = {}
+): string {
+  try {
+    const out = execFileSync("git", ["symbolic-ref", "refs/remotes/origin/HEAD"], {
+      cwd: repoRoot,
+      encoding: "utf8",
+      timeout: 3000,
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    if (out.startsWith("refs/remotes/")) {
+      return out.slice("refs/remotes/".length);
+    }
+  } catch {
+    // origin/HEAD belum diset — cek kandidat standar
+  }
+
+  for (const name of ["main", "master", "develop"]) {
+    if (gitRefExists(repoRoot, `refs/remotes/origin/${name}`)) {
+      return `origin/${name}`;
+    }
+  }
+  for (const name of ["main", "master", "develop"]) {
+    if (gitRefExists(repoRoot, `refs/heads/${name}`)) {
+      return opts.preferOrigin ? `origin/${name}` : name;
+    }
+  }
+  return "origin/main";
 }

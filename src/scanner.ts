@@ -84,6 +84,8 @@ function walk(
 export interface ScanRepositoryOptions {
   /** Bila true, hanya file yang berubah menurut git (+ file baru belum terindeks) yang diproses. */
   changedOnly?: boolean;
+  /** Daftar path relatif eksplisit (mis. dari watcher) untuk scan inkremental tanpa walk penuh. */
+  changedPaths?: string[];
   /** Bila true, deteksi LSP opsional (tsserver/gopls/pyright) best-effort. Default: off. */
   lsp?: boolean;
 }
@@ -102,31 +104,78 @@ export async function scanRepository(
     // dan handle SQLite tidak bocor (di Windowshandle yang bocor menahan
     // scopecairn.db-wal).
     ensureDefaultFiles(repoRoot);
+    const known = new Set<string>();
+    try {
+      for (const r of db.prepare(`SELECT path FROM files`).all() as { path: string }[]) {
+        known.add(r.path);
+      }
+    } catch {
+      // DB kosong / skema lama — fallback ke walk penuh.
+    }
+    const dbEmpty = known.size === 0;
+
+    const explicitPaths = (opts?.changedPaths ?? [])
+      .map((p) => p.replace(/\\/g, "/").replace(/^\.\//, ""))
+      .filter(Boolean);
+    const useExplicitPaths = explicitPaths.length > 0 && !dbEmpty;
+
     const changedOnly = opts?.changedOnly === true;
     let changedSet: Set<string> | null = null;
-    if (changedOnly) {
-      try {
-        changedSet = new Set(
-          changedFilesVsHead(repoRoot).map((p) => p.replace(/\\/g, "/"))
-        );
-      } catch {
-        changedSet = new Set<string>();
-      }
-    }
     const allAbs: string[] = [];
-    walk(repoRoot, repoRoot, rules, allAbs);
-    let scanAbs = allAbs;
-    if (changedOnly && changedSet) {
-      const known = new Set<string>();
-      try {
-        for (const r of db.prepare(`SELECT path FROM files`).all() as { path: string }[]) {
-          known.add(r.path);
+    let scanAbs: string[] = [];
+
+    if (useExplicitPaths) {
+      changedSet = new Set<string>();
+      const absSeen = new Set<string>();
+      for (const rel of explicitPaths) {
+        if (isIgnored(rel, rules)) continue;
+        const abs = path.join(repoRoot, ...rel.split("/"));
+        try {
+          const st = fs.statSync(abs);
+          if (st.isFile()) {
+            changedSet.add(rel);
+            if (!absSeen.has(abs)) {
+              absSeen.add(abs);
+              scanAbs.push(abs);
+            }
+          } else if (st.isDirectory()) {
+            if (isIgnored(rel + "/", rules)) continue;
+            const subAbs: string[] = [];
+            walk(repoRoot, abs, rules, subAbs);
+            for (const fAbs of subAbs) {
+              if (!absSeen.has(fAbs)) {
+                absSeen.add(fAbs);
+                scanAbs.push(fAbs);
+              }
+              changedSet.add(toPosixRel(repoRoot, fAbs));
+            }
+            const prefix = rel + "/";
+            for (const k of known) {
+              if (k.startsWith(prefix)) changedSet.add(k);
+            }
+          }
+        } catch {
+          // File/direktori dihapus — tandai di changedSet agar dibersihkan dari DB
+          changedSet.add(rel);
+          const prefix = rel + "/";
+          for (const k of known) {
+            if (k.startsWith(prefix)) changedSet.add(k);
+          }
         }
-      } catch {
-        // DB kosong / skema lama — fallback ke semua file bila fingerprint kosong.
       }
-      const dbEmpty = known.size === 0;
-      if (!dbEmpty) {
+    } else {
+      if (changedOnly) {
+        try {
+          changedSet = new Set(
+            changedFilesVsHead(repoRoot).map((p) => p.replace(/\\/g, "/"))
+          );
+        } catch {
+          changedSet = new Set<string>();
+        }
+      }
+      walk(repoRoot, repoRoot, rules, allAbs);
+      scanAbs = allAbs;
+      if (changedOnly && changedSet && !dbEmpty) {
         // Hanya proses file git-dirty + file yang belum ada di DB (aman untuk
         // scan pertama pasca-commit); sisanya di-skip tanpa merusak seenPaths.
         scanAbs = allAbs.filter((abs) => {
@@ -195,9 +244,15 @@ export async function scanRepository(
     const indexedVersion = db.prepare(`SELECT value FROM meta WHERE key = 'extractor_version'`)
       .get() as { value: string } | undefined;
     const parserChanged = indexedVersion?.value !== extractorVersion;
-    // Backfill/parser-change butuh re-extract penuh — batalkan filter changedOnly.
-    if ((backfill || parserChanged) && scanAbs.length < allAbs.length) {
-      scanAbs = allAbs;
+    // Backfill/parser-change butuh re-extract penuh — batalkan filter changedOnly / changedPaths.
+    if (backfill || parserChanged) {
+      if (useExplicitPaths && allAbs.length === 0) {
+        walk(repoRoot, repoRoot, rules, allAbs);
+      }
+      if (scanAbs.length < allAbs.length || useExplicitPaths) {
+        scanAbs = allAbs;
+        changedSet = null;
+      }
     }
 
     // Two-phase indexing: phase 1 inserts symbols for all changed files,

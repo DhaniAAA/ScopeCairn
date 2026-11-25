@@ -1,5 +1,5 @@
 import { openDb } from "../db.js";
-import { logInvocation } from "../invocations.js";
+import { logInvocation, recordInvocationSavings } from "../invocations.js";
 import { refreshIndex } from "../refresh.js";
 import { retrieve } from "../retrieval/retrieve.js";
 import { classify, type Classification } from "../retrieval/classify.js";
@@ -13,7 +13,7 @@ import { cmdOrientasi, looksLikeRepoPath } from "./orientasi.js";
 import { loadDecisions } from "../decisions.js";
 import { loadProtectedPatterns } from "../scope/protected.js";
 import { persistScope } from "../scope/taskScope.js";
-import { changedFilesVsHead } from "../retrieval/gitChanged.js";
+import { changedFilesVsBase, changedFilesVsHead } from "../retrieval/gitChanged.js";
 import { skipRefresh } from "./opts.js";
 
 export type ContextFormat = "brief" | "table" | "tree" | "mermaid" | "markdown";
@@ -37,6 +37,8 @@ export interface ContextOptions {
   anchor?: string[];
   explain?: boolean;
   format?: string;
+  fromDiff?: boolean;
+  base?: string;
 }
 
 /** Seksi markdown yang boleh dibuang saat --max-tokens — harus PERSIS sama
@@ -204,6 +206,123 @@ export function renderContextFormat(
   }
 }
 
+function dropLineItemsFromEnd(section: string, minKeepLines = 1): string | null {
+  const lines = section.split("\n");
+  // Pertahankan baris heading (`## ...`) + minimal `minKeepLines` item bila ada.
+  if (lines.length <= 1 + minKeepLines) return null;
+  lines.pop();
+  while (lines.length > 1 && lines[lines.length - 1].trim() === "") {
+    lines.pop();
+  }
+  return lines.length > 1 ? lines.join("\n") : null;
+}
+
+/**
+ * Smart Token Packing (--max-tokens): pangkas secara berprioritas agar
+ * signature penting + impact/scope inti tetap utuh:
+ * 1) Seksi berprioritas rendah (analogi, hotspots, rules, ringkasan, decisions)
+ * 2) Micro-excerpt di `## Key Excerpts` satu per satu (dari skor terendah)
+ * 3) Kandidat `### MEDIUM` di `## Relevant Files` dari bawah
+ * 4) Daftar `## Key Symbols` dari bawah (pertahankan top 2 signature)
+ * 5) Seksi PRUNE_SECTIONS tersisa
+ * 6) Pemotongan di batas baris terakhir hanya sebagai fallback ekstrem.
+ */
+export function packContextToTokenBudget(markdown: string, maxTokens: number): string {
+  if (!maxTokens || maxTokens <= 0 || Math.ceil(markdown.length / 4) <= maxTokens) {
+    return markdown;
+  }
+  const footer = `\n\n## Note\nOutput dipangkas agar muat --max-tokens ${maxTokens} (≈ ${maxTokens * 4} char).\n`;
+  const limitChars = Math.max(80, maxTokens * 4 - footer.length);
+  const parts = markdown.split(/\n(?=## )/);
+
+  const fits = (): boolean => parts.join("\n").length <= limitChars;
+  const dropSection = (prefix: string): boolean => {
+    const idx = parts.findIndex((p) => p.startsWith(`## ${prefix}`));
+    if (idx >= 0) {
+      parts.splice(idx, 1);
+      return true;
+    }
+    return false;
+  };
+
+  // 1. Buang seksi opsional berprioritas rendah terlebih dahulu
+  const lowPrioritySections = [
+    "Analogi task terverifikasi",
+    "Analogi riwayat",
+    "Critical hotspots",
+    "Hotspot arsitektur",
+    "Cara pakai",
+    "Project Rules",
+    "Ringkasan",
+    "Keputusan Arsitektur",
+  ];
+  for (const sec of lowPrioritySections) {
+    if (fits()) break;
+    dropSection(sec);
+  }
+
+  // 2. Pangkas `## Key Excerpts` satu blok `### ` per langkah (dari skor terendah)
+  if (!fits()) {
+    const exIdx = parts.findIndex((p) => p.startsWith("## Key Excerpts"));
+    if (exIdx >= 0) {
+      const exBlocks = parts[exIdx].split(/\n(?=### )/);
+      while (exBlocks.length > 1 && !fits()) {
+        exBlocks.pop();
+        if (exBlocks.length <= 1) {
+          parts.splice(exIdx, 1);
+        } else {
+          parts[exIdx] = exBlocks.join("\n");
+        }
+      }
+      if (!fits() && parts[exIdx]?.startsWith("## Key Excerpts")) {
+        parts.splice(exIdx, 1);
+      }
+    }
+  }
+
+  // 3. Pangkas kandidat `### MEDIUM` di `## Relevant Files` dari bawah
+  if (!fits()) {
+    const rfIdx = parts.findIndex((p) => p.startsWith("## Relevant Files"));
+    if (rfIdx >= 0) {
+      const sub = parts[rfIdx].split(/\n(?=### MEDIUM)/);
+      if (sub.length === 2) {
+        let medPart: string | null = sub[1];
+        while (medPart && !fits()) {
+          medPart = dropLineItemsFromEnd(medPart, 0);
+          parts[rfIdx] = medPart ? `${sub[0]}\n${medPart}` : sub[0];
+        }
+      }
+    }
+  }
+
+  // 4. Pangkas `## Key Symbols` dari bawah (pertahankan minimal 2 signature teratas)
+  if (!fits()) {
+    const ksIdx = parts.findIndex((p) => p.startsWith("## Key Symbols"));
+    if (ksIdx >= 0) {
+      let cur: string | null = parts[ksIdx];
+      while (cur && !fits()) {
+        cur = dropLineItemsFromEnd(cur, 2);
+        if (cur) parts[ksIdx] = cur;
+        else break;
+      }
+    }
+  }
+
+  // 5. Jika masih melebihi anggaran, gugurkan sisa PRUNE_SECTIONS
+  for (const sec of PRUNE_SECTIONS) {
+    if (fits()) break;
+    dropSection(sec);
+  }
+
+  let packed = parts.join("\n");
+  if (packed.length > limitChars) {
+    const slice = packed.slice(0, limitChars);
+    const nl = slice.lastIndexOf("\n");
+    packed = nl > limitChars * 0.5 ? slice.slice(0, nl) : slice;
+  }
+  return packed.trimEnd() + footer;
+}
+
 // Entry point utama agent (PRD §8.4): satu perintah, ScopeCairn yang
 // memutuskan seberapa banyak dikembalikan (SIMPLE ringkas / COMPLEX penuh).
 export async function cmdContext(
@@ -211,6 +330,13 @@ export async function cmdContext(
   task: string,
   opts: ContextOptions = {}
 ): Promise<void> {
+  let effectiveTask = (task ?? "").trim();
+  if (!effectiveTask && !opts.fromDiff) {
+    console.error('Usage: scopecairn context "<task>" (atau gunakan --from-diff)');
+    process.exitCode = 1;
+    return;
+  }
+
   if (!skipRefresh(opts)) {
     const { stats, bulk } = await refreshIndex(repoRoot);
     if (bulk) {
@@ -258,19 +384,57 @@ export async function cmdContext(
     // Task berupa path (`./`, `src/db.ts`, ...) = minta orientasi:
     // deterministik, tanpa ranking. Baru ke retrieval bila bukan path.
     // (--json selalu lewat retrieval agar stdout tetap satu envelope JSON.)
-    if (!opts.json && looksLikeRepoPath(db, repoRoot, task)) {
+    if (!opts.json && !opts.fromDiff && effectiveTask && looksLikeRepoPath(db, repoRoot, effectiveTask)) {
       logInvocation(db, "context");
-      cmdOrientasi(repoRoot, task);
+      cmdOrientasi(repoRoot, effectiveTask);
       return;
     }
 
-    const result = retrieve(db, repoRoot, task, { anchors: opts.anchor });
+    let diffFiles: string[] = [];
+    if (opts.fromDiff) {
+      if (opts.base) {
+        const vsBase = changedFilesVsBase(repoRoot, opts.base);
+        if (vsBase.baseInvalid) {
+          const msg = `Base ref "${opts.base}" tidak valid untuk --from-diff.`;
+          if (opts.json) {
+            printEmptyEnvelope("no_symbols", msg);
+          } else {
+            console.error(msg);
+          }
+          process.exitCode = 1;
+          return;
+        }
+        diffFiles = vsBase.files;
+      } else {
+        diffFiles = changedFilesVsHead(repoRoot);
+      }
+      diffFiles = diffFiles
+        .map((p) => p.replace(/\\/g, "/"))
+        .filter((p) => !p.startsWith(".scopecairn/"));
+
+      if (diffFiles.length === 0 && !effectiveTask) {
+        if (opts.json) {
+          printEmptyEnvelope("no_symbols", "tidak ada perubahan git aktif untuk --from-diff");
+          return;
+        }
+        console.log("Tidak ada perubahan git aktif untuk --from-diff.");
+        return;
+      }
+      if (!effectiveTask) {
+        effectiveTask = `diff vs ${opts.base ?? "HEAD"}: ${diffFiles.slice(0, 4).join(", ")}`;
+      }
+    }
+
+    const effectiveAnchors = [...(opts.anchor ?? []), ...diffFiles];
+    const result = retrieve(db, repoRoot, effectiveTask, {
+      anchors: effectiveAnchors.length > 0 ? effectiveAnchors : undefined,
+    });
     if (result.ranked.length === 0) {
       // Selalu aman dipanggil (prinsip 6): tanpa seed pun beri arahan SIMPLE,
       // bukan jalan buntu — simpan scope kosong agar verify mengenali task ini.
       const t = db
         .prepare(`INSERT INTO tasks(description, complexity) VALUES (?, ?)`)
-        .run(task, "SIMPLE");
+        .run(effectiveTask, "SIMPLE");
       const taskId = Number(t.lastInsertRowid);
       persistScope(db, taskId, { required: [], optional: [], protected: [] });
       logInvocation(db, "context", taskId);
@@ -280,7 +444,7 @@ export async function cmdContext(
       }
       const title = opts.knowledge ? `# Task Context (Knowledge)` : `# Task Context`;
       console.log(
-        `${title}\n\n## Task\n${task}\n\n## Complexity\n` +
+        `${title}\n\n## Task\n${effectiveTask}\n\n## Complexity\n` +
           `SIMPLE (tidak ada simbol cocok di index)\n\n` +
           `Task sederhana. Gunakan pencarian langsung. ` +
           `Bila istilah domain tak cocok dengan nama kode, tambah alias di ` +
@@ -316,7 +480,7 @@ export async function cmdContext(
     // Persist untuk compliance/recall Fase 6.
     const t = db
       .prepare(`INSERT INTO tasks(description, complexity) VALUES (?, ?)`)
-      .run(task, opts.escalate ? "COMPLEX" : cls.complexity);
+      .run(effectiveTask, opts.escalate ? "COMPLEX" : cls.complexity);
     const taskId = Number(t.lastInsertRowid);
     const insCtx = db.prepare(
       `INSERT INTO task_context(task_id, symbol_id, score, reason) VALUES (?, ?, ?, ?)`
@@ -324,7 +488,7 @@ export async function cmdContext(
     for (const r of result.ranked.slice(0, 20)) {
       insCtx.run(taskId, r.id, r.score, r.reason);
     }
-    logInvocation(db, "context", taskId);
+    const invId = logInvocation(db, "context", taskId);
 
     const mode = opts.mode ?? "NORMAL";
     // Cost-aware routing: konteks kecil → FAST implisit (hindari eskalasi
@@ -361,7 +525,7 @@ export async function cmdContext(
       try {
         const { historySearch } = await import("../retrieval/history/search.js");
         const seedFiles = [...new Set(result.ranked.filter((r) => r.score >= 0.15).map((r) => r.file))].slice(0, 20);
-        historyAnalogs = historySearch(db, task, { seedFiles, limit: 3 });
+        historyAnalogs = historySearch(db, effectiveTask, { seedFiles, limit: 3 });
         if (opts.withDiff) {
           const { execFileSync } = await import("node:child_process");
           for (const a of historyAnalogs) {
@@ -399,7 +563,7 @@ export async function cmdContext(
       }
     }
 
-    const built = buildContext(db, task, result, cls, {
+    const built = buildContext(db, effectiveTask, result, cls, {
       escalate,
       repoRoot,
       history: historyAnalogs.length > 0 ? { analogs: historyAnalogs, diffStats } : undefined,
@@ -417,11 +581,33 @@ export async function cmdContext(
     } catch {
       // persistensi scope bersifat opsional — jangan gagalkan context
     }
+    const relevantFiles = [
+      ...new Set([
+        ...built.high,
+        ...built.medium,
+        ...built.scope.required,
+        ...built.scope.optional,
+        ...result.ranked.slice(0, 5).map((r) => r.file),
+      ]),
+    ];
+    let fullFilesBytes = 0;
+    if (relevantFiles.length > 0) {
+      try {
+        const ph = relevantFiles.map(() => "?").join(",");
+        const row = db
+          .prepare(`SELECT COALESCE(SUM(size), 0) AS total FROM files WHERE path IN (${ph})`)
+          .get(...relevantFiles) as { total: number } | undefined;
+        fullFilesBytes = Number(row?.total ?? 0);
+      } catch {
+        fullFilesBytes = 0;
+      }
+    }
+
     // F2 --json: envelope machine-readable untuk RAG/knowledge agent.
     // Default markdown tetap agar konsumen lama tidak pecah.
     if (opts.json) {
       const payload = buildContextPayload({
-        task,
+        task: effectiveTask,
         cls,
         escalate,
         mode: effectiveMode,
@@ -430,7 +616,9 @@ export async function cmdContext(
         ranked: result.ranked,
         analogs: historyAnalogs,
       });
-      console.log(JSON.stringify(payload, null, 2));
+      const jsonOut = JSON.stringify(payload, null, 2);
+      recordInvocationSavings(db, invId, fullFilesBytes, Buffer.byteLength(jsonOut, "utf8"));
+      console.log(jsonOut);
       return;
     }
     // Fase 4.1 --format: brief|table|tree|mermaid (default markdown).
@@ -439,7 +627,7 @@ export async function cmdContext(
     if (fmt !== "markdown") {
       const rendered = renderContextFormat(
         fmt,
-        task,
+        effectiveTask,
         result.ranked,
         db as unknown as {
           prepare: (sql: string) => { all: (...args: unknown[]) => unknown[] };
@@ -455,15 +643,10 @@ export async function cmdContext(
       let formatted = rendered;
       if (opts.explain) formatted += explainTable(result);
       const maxTokensFmt = opts.maxTokens;
-      if (
-        maxTokensFmt &&
-        maxTokensFmt > 0 &&
-        Math.ceil(formatted.length / 4) > maxTokensFmt
-      ) {
-        formatted =
-          formatted.slice(0, maxTokensFmt * 4) +
-          `\n\n## Note\nOutput dipangkas agar muat --max-tokens ${maxTokensFmt} (≈ ${maxTokensFmt * 4} char).\n`;
+      if (maxTokensFmt && maxTokensFmt > 0) {
+        formatted = packContextToTokenBudget(formatted, maxTokensFmt);
       }
+      recordInvocationSavings(db, invId, fullFilesBytes, Buffer.byteLength(formatted, "utf8"));
       console.log(formatted);
       return;
     }
@@ -478,17 +661,10 @@ export async function cmdContext(
       out += explainTable(result);
     }
     const maxTokens = opts.maxTokens;
-    if (maxTokens && maxTokens > 0 && Math.ceil(out.length / 4) > maxTokens) {
-      const parts = out.split(/\n(?=## )/);
-      for (const sec of PRUNE_SECTIONS) {
-        if (Math.ceil(parts.join("\n").length / 4) <= maxTokens) break;
-        const i = parts.findIndex((p) => p.startsWith(`## ${sec}`));
-        if (i >= 0) parts.splice(i, 1);
-      }
-      out = parts.join("\n");
-      if (Math.ceil(out.length / 4) > maxTokens) out = out.slice(0, maxTokens * 4);
-      out += `\n\n## Note\nOutput dipangkas agar muat --max-tokens ${maxTokens} (≈ ${maxTokens * 4} char).\n`;
+    if (maxTokens && maxTokens > 0) {
+      out = packContextToTokenBudget(out, maxTokens);
     }
+    recordInvocationSavings(db, invId, fullFilesBytes, Buffer.byteLength(out, "utf8"));
     console.log(out);
   } finally {
     db.close();

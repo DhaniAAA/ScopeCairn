@@ -48,6 +48,7 @@ jobs:
       - name: Push updated CHANGELOG.md
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
+          branch: master
           commit_message: "chore: auto-update CHANGELOG for ${{ github.ref_name }}"
           file_pattern: CHANGELOG.md
 

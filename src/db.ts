@@ -113,6 +113,8 @@ export function openDb(repoRoot: string): DatabaseSyncType {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       task_id INTEGER REFERENCES tasks(id) ON DELETE SET NULL,
       command TEXT NOT NULL,
+      full_bytes INTEGER NOT NULL DEFAULT 0,
+      returned_bytes INTEGER NOT NULL DEFAULT 0,
       timestamp TEXT NOT NULL DEFAULT (datetime('now'))
     );
     CREATE INDEX IF NOT EXISTS idx_invocations_cmd ON invocations(command);
@@ -193,6 +195,8 @@ export function openDb(repoRoot: string): DatabaseSyncType {
   for (const [table, column, ddl] of [
     ["relationships", "evidence", "evidence TEXT NOT NULL DEFAULT 'EXTRACTED'"],
     ["symbols", "doc", "doc TEXT NOT NULL DEFAULT ''"],
+    ["invocations", "full_bytes", "full_bytes INTEGER NOT NULL DEFAULT 0"],
+    ["invocations", "returned_bytes", "returned_bytes INTEGER NOT NULL DEFAULT 0"],
   ] as const) {
     const cols = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
     if (!cols.some((c) => c.name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);

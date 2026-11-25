@@ -2,6 +2,8 @@ import { scanRepository, type ScanStats, type ScanRepositoryOptions } from "./sc
 export interface RefreshOptions {
   /** Teruskan ke scanRepository: hanya proses file git-dirty. */
   changedOnly?: boolean;
+  /** Daftar path relatif eksplisit (mis. dari watcher) agar tak perlu walk penuh. */
+  changedPaths?: string[];
 }
 
 export interface RefreshResult {
@@ -18,7 +20,10 @@ export async function refreshIndex(
   repoRoot: string,
   opts?: RefreshOptions | ScanRepositoryOptions
 ): Promise<RefreshResult> {
-  const stats = await scanRepository(repoRoot, { changedOnly: opts?.changedOnly === true });
+  const stats = await scanRepository(repoRoot, {
+    changedOnly: opts?.changedOnly === true,
+    ...(opts?.changedPaths ? { changedPaths: opts.changedPaths } : {}),
+  });
   const bulk = stats.inserted + stats.updated > BULK_THRESHOLD;
   return { stats, bulk };
 }

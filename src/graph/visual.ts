@@ -130,8 +130,8 @@ export function buildVisualModel(db: DatabaseSync): VisualModel {
 
   // Graphify Engine: metrik + komunitas dihitung malas (lazy) — scan pertama
   // mengisi cache, scan berikutnya hanya membaca bila graph tak berubah.
-  let prBySym = new Map<number, number>();
-  let clusterBySym = new Map<number, number>();
+  const prBySym = new Map<number, number>();
+  const clusterBySym = new Map<number, number>();
   const clusterNames = new Map<number, string>();
   let modularity = 0;
   try {
@@ -449,7 +449,7 @@ function layout(nodes: VNode[], edges: VEdge[]): void {
 
   const ITERS = 110;
   let temp = 90;
-  const dTemp = Math.pow(0.5 / temp, 1 / ITERS);
+  const dTemp = (0.5 / temp) ** (1 / ITERS);
   for (let it = 0; it < ITERS; it++) {
     const disp = new Map<number, { x: number; y: number }>();
     for (const n of nodes) disp.set(n.id, { x: 0, y: 0 });
@@ -533,7 +533,7 @@ function layout(nodes: VNode[], edges: VEdge[]): void {
   void byId;
 }
 
-export function renderHtml(model: VisualModel, title: string, generated: string): string {
+export function renderHtml(model: VisualModel, title: string, _generated: string): string {
   // Data grafik ditanam sebagai JSON (lolos `<` → \u003c agar aman di <script>).
   const payload = JSON.stringify({
     files: model.nodes.map((n) => ({
@@ -550,15 +550,6 @@ export function renderHtml(model: VisualModel, title: string, generated: string)
       files: model.truncatedFiles, edges: model.truncatedEdges, symbols: model.truncatedSymbols,
     },
   }).replace(/</g, "\\u003c");
-
-  const truncNote =
-    model.truncatedFiles > 0 || model.truncatedSymbols > 0
-      ? ` (+${model.truncatedFiles} files, +${model.truncatedSymbols} symbols beyond budget)`
-      : "";
-  const clusterNote =
-    model.clusterNames.length > 0
-      ? `${model.clusterNames.length} communities · Q=${model.modularity.toFixed(3)}`
-      : "";
 
   return `<!DOCTYPE html>
 <html lang="en" data-theme="dark">

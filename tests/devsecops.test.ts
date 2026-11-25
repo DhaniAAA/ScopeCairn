@@ -5,8 +5,11 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { scanRepository } from "../src/scanner.js";
-import { runVerify, cmdVerify, buildVerifySarif } from "../src/commands/verify.js";
+import { runVerify, cmdVerify, buildVerifySarif, computePrRisk } from "../src/commands/verify.js";
 import { installCiWorkflow, CI_WORKFLOW_REL } from "../src/commands/init.js";
+import { detectDefaultBaseRef } from "../src/retrieval/gitChanged.js";
+import { openDb } from "../src/db.js";
+import { loadProtectedPatterns } from "../src/scope/protected.js";
 import { scanSecretsInDiff, scanUnifiedDiffForSecrets } from "../src/scope/secrets.js";
 
 function git(repo: string, args: string[]): string {
@@ -134,6 +137,107 @@ test("installCiWorkflow menulis GitHub Actions workflow dengan Node 22 dan uploa
     assert.ok(yml.includes("security-events: write"));
     assert.ok(yml.includes("--sarif"));
     assert.ok(yml.includes("github/codeql-action/upload-sarif@v3"));
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("detectDefaultBaseRef & installCiWorkflow mendeteksi branch master otomatis", () => {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), "sc-master-branch-"));
+  try {
+    git(repo, ["init", "-b", "master"]);
+    git(repo, ["config", "user.email", "sec@example.com"]);
+    git(repo, ["config", "user.name", "Sec Tester"]);
+    fs.writeFileSync(path.join(repo, "README.md"), "hello\n", "utf8");
+    git(repo, ["add", "."]);
+    git(repo, ["commit", "-m", "init"]);
+
+    assert.equal(detectDefaultBaseRef(repo), "master");
+    assert.equal(detectDefaultBaseRef(repo, { preferOrigin: true }), "origin/master");
+
+    installCiWorkflow(repo, "scopecairn");
+    const yml = fs.readFileSync(path.join(repo, CI_WORKFLOW_REL), "utf8");
+    assert.ok(yml.includes("--base origin/master"), "workflow CI harus memakai origin/master");
+    assert.ok(!yml.includes("--base origin/main"));
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("computePrRisk menandai file di dalam dependency cycle sebagai HIGH lewat batch lookup", async () => {
+  const repo = createGitRepo();
+  try {
+    fs.writeFileSync(
+      path.join(repo, "src", "a.ts"),
+      `import { b } from "./b.js";\nexport function a(): number { return b(); }\n`,
+      "utf8"
+    );
+    fs.writeFileSync(
+      path.join(repo, "src", "b.ts"),
+      `import { a } from "./a.js";\nexport function b(): number { return a(); }\n`,
+      "utf8"
+    );
+    await scanRepository(repo);
+
+    const db = openDb(repo);
+    try {
+      const report = computePrRisk(db, repo, ["src/a.ts", "src/config.ts"], "HEAD", loadProtectedPatterns(repo));
+      const fileA = report.files.find((f) => f.path === "src/a.ts");
+      const fileCfg = report.files.find((f) => f.path === "src/config.ts");
+      assert.equal(fileA?.inCycle, true);
+      assert.equal(fileA?.risk, "HIGH");
+      assert.equal(fileCfg?.inCycle, false);
+      assert.equal(report.aggregate, "HIGH");
+    } finally {
+      db.close();
+    }
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("secrets scanner mendukung inline suppression (scopecairn:ignore-secret) serta allowlist & custom rules di config.yml", () => {
+  const repo = createGitRepo();
+  try {
+    const fakeGhp = "ghp_" + "9876543210abcdefghij987654";
+    const diffSuppressed = [
+      "--- a/src/config.ts",
+      "+++ b/src/config.ts",
+      "@@ -2,1 +2,3 @@",
+      `+export const MOCK_GHP = "${fakeGhp}"; // scopecairn:ignore-secret`,
+      `+export const LIVE_GHP = "${fakeGhp}";`,
+    ].join("\n");
+    const supFindings = scanUnifiedDiffForSecrets(diffSuppressed, "src/config.ts");
+    assert.equal(supFindings.length, 1);
+    assert.equal(supFindings[0].line, 3);
+
+    // Konfigurasi .scopecairn/config.yml: allowlist + custom rules
+    fs.mkdirSync(path.join(repo, ".scopecairn"), { recursive: true });
+    fs.writeFileSync(
+      path.join(repo, ".scopecairn", "config.yml"),
+      [
+        "w_seed: 0.5",
+        "secrets_allowlist:",
+        `  - ${fakeGhp}`,
+        "secrets_rules:",
+        "  - Internal Token::\\bint_live_[A-Za-z0-9]{16,}\\b",
+      ].join("\n"),
+      "utf8"
+    );
+
+    const internalSecret = "int_live_" + "AbCdEfGh1234567890";
+    fs.writeFileSync(
+      path.join(repo, "src", "config.ts"),
+      [
+        `export const ALLOWED = "${fakeGhp}";`,
+        `export const INTERNAL = "${internalSecret}";`,
+      ].join("\n"),
+      "utf8"
+    );
+
+    const diffFindings = scanSecretsInDiff(repo, ["src/config.ts"]);
+    assert.equal(diffFindings.length, 1);
+    assert.equal(diffFindings[0].kind, "Internal Token");
   } finally {
     fs.rmSync(repo, { recursive: true, force: true });
   }

@@ -2,10 +2,16 @@ import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { isTestPath } from "../retrieval/retrieve.js";
+import { loadConfig } from "../retrieval/config.js";
 
 export interface SecretRule {
   label: string;
   pattern: RegExp;
+}
+
+export interface SecretsScanConfig {
+  allowlist?: RegExp[];
+  customRules?: SecretRule[];
 }
 
 export interface SecretFinding {
@@ -60,11 +66,41 @@ export const SECRET_RULES: SecretRule[] = [
 ];
 
 const PLACEHOLDER_RE = /(?:your[_-]|example|placeholder|changeme|dummy|sample|test[_-]?key|<[^>]+>|x{5,}|\*{4,})/i;
+export const INLINE_SECRET_SUPPRESS_RE = /scopecairn:ignore-secret/i;
+
+/** Muat `secrets_allowlist` & `secrets_rules` dari `.scopecairn/config.yml` (aman jika regex invalid). */
+export function loadSecretsScanConfig(repoRoot: string): SecretsScanConfig {
+  const cfg = loadConfig(repoRoot);
+  const allowlist: RegExp[] = [];
+  for (const raw of cfg.secretsAllowlist) {
+    try {
+      allowlist.push(new RegExp(raw));
+    } catch {
+      // abaikan regex invalid di config.yml
+    }
+  }
+  const customRules: SecretRule[] = [];
+  for (const r of cfg.secretsRules) {
+    try {
+      customRules.push({ label: r.label, pattern: new RegExp(r.pattern) });
+    } catch {
+      // abaikan regex invalid di config.yml
+    }
+  }
+  return { allowlist, customRules };
+}
+
+function isSuppressedLine(content: string, secretsCfg?: SecretsScanConfig): boolean {
+  if (PLACEHOLDER_RE.test(content) || INLINE_SECRET_SUPPRESS_RE.test(content)) return true;
+  if (secretsCfg?.allowlist?.some((re) => re.test(content))) return true;
+  return false;
+}
 
 /** Deteksi pola rahasia (API key, token, private key) pada teks. */
-export function detectSecrets(text: string): string[] {
+export function detectSecrets(text: string, secretsCfg?: SecretsScanConfig): string[] {
   const found: string[] = [];
-  for (const rule of SECRET_RULES) {
+  const rules = [...SECRET_RULES, ...(secretsCfg?.customRules ?? [])];
+  for (const rule of rules) {
     if (rule.pattern.test(text)) {
       found.push(rule.label);
     }
@@ -88,9 +124,14 @@ function maskLinePreview(line: string, pattern: RegExp): string {
 /**
  * Ekstrak baris yang ditambahkan dari unified diff beserta nomor baris target.
  */
-export function scanUnifiedDiffForSecrets(diffText: string, filePath: string): SecretFinding[] {
+export function scanUnifiedDiffForSecrets(
+  diffText: string,
+  filePath: string,
+  secretsCfg?: SecretsScanConfig
+): SecretFinding[] {
   const findings: SecretFinding[] = [];
   const seen = new Set<string>();
+  const rules = [...SECRET_RULES, ...(secretsCfg?.customRules ?? [])];
   const hunkRe = /^@@\s+-\d+(?:,\d+)?\s+\+(\d+)(?:,\d+)?\s+@@/;
   let currentLine = 0;
   let inHunk = false;
@@ -109,8 +150,8 @@ export function scanUnifiedDiffForSecrets(diffText: string, filePath: string): S
 
     if (rawLine.startsWith("+")) {
       const content = rawLine.slice(1);
-      if (!PLACEHOLDER_RE.test(content)) {
-        for (const rule of SECRET_RULES) {
+      if (!isSuppressedLine(content, secretsCfg)) {
+        for (const rule of rules) {
           if (rule.pattern.test(content)) {
             const key = `${filePath}:${currentLine}:${rule.label}`;
             if (!seen.has(key)) {
@@ -134,7 +175,11 @@ export function scanUnifiedDiffForSecrets(diffText: string, filePath: string): S
   return findings;
 }
 
-function scanPlainFileForSecrets(absPath: string, relPath: string): SecretFinding[] {
+function scanPlainFileForSecrets(
+  absPath: string,
+  relPath: string,
+  secretsCfg?: SecretsScanConfig
+): SecretFinding[] {
   const findings: SecretFinding[] = [];
   let raw: string;
   try {
@@ -144,11 +189,12 @@ function scanPlainFileForSecrets(absPath: string, relPath: string): SecretFindin
   } catch {
     return findings;
   }
+  const rules = [...SECRET_RULES, ...(secretsCfg?.customRules ?? [])];
   const lines = raw.split(/\r?\n/);
   for (let i = 0; i < lines.length; i++) {
     const content = lines[i];
-    if (PLACEHOLDER_RE.test(content)) continue;
-    for (const rule of SECRET_RULES) {
+    if (isSuppressedLine(content, secretsCfg)) continue;
+    for (const rule of rules) {
       if (rule.pattern.test(content)) {
         findings.push({
           file: relPath,
@@ -169,8 +215,10 @@ function scanPlainFileForSecrets(absPath: string, relPath: string): SecretFindin
 export function scanSecretsInDiff(
   repoRoot: string,
   changedFiles: string[],
-  baseRef?: string
+  baseRef?: string,
+  secretsCfg?: SecretsScanConfig
 ): SecretFinding[] {
+  const effectiveCfg = secretsCfg ?? loadSecretsScanConfig(repoRoot);
   const findings: SecretFinding[] = [];
   const seen = new Set<string>();
   const addFindings = (list: SecretFinding[]) => {
@@ -199,7 +247,7 @@ export function scanSecretsInDiff(
         });
         if (dBase.trim().length > 0) {
           gotDiff = true;
-          addFindings(scanUnifiedDiffForSecrets(dBase, rel));
+          addFindings(scanUnifiedDiffForSecrets(dBase, rel, effectiveCfg));
         }
       } catch {
         // ignore
@@ -215,7 +263,7 @@ export function scanSecretsInDiff(
       });
       if (dHead.trim().length > 0) {
         gotDiff = true;
-        addFindings(scanUnifiedDiffForSecrets(dHead, rel));
+        addFindings(scanUnifiedDiffForSecrets(dHead, rel, effectiveCfg));
       }
     } catch {
       // ignore
@@ -225,7 +273,7 @@ export function scanSecretsInDiff(
       // Untracked atau baru ditambahkan di index tanpa HEAD (mis. initial commit)
       const abs = path.join(repoRoot, ...rel.split("/"));
       if (fs.existsSync(abs)) {
-        addFindings(scanPlainFileForSecrets(abs, rel));
+        addFindings(scanPlainFileForSecrets(abs, rel, effectiveCfg));
       }
     }
   }

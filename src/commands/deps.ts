@@ -86,8 +86,7 @@ function stripPySpecifier(s: string): string {
   return m ? m[1] : t;
 }
 
-function parsePyproject(repoRoot: string): DepEntry[] {
-  const p = path.join(repoRoot, "pyproject.toml");
+function parsePyprojectAt(p: string, pkgDir?: string): DepEntry[] {
   const raw = readText(p);
   if (!raw) return [];
   const out: DepEntry[] = [];
@@ -95,10 +94,19 @@ function parsePyproject(repoRoot: string): DepEntry[] {
   const push = (name: string, scope: string) => {
     const n = name.trim();
     if (!n) return;
+    if (n.toLowerCase() === "python" && scope.startsWith("poetry")) return;
     const key = `${scope}:${n}`;
     if (seen.has(key)) return;
     seen.add(key);
-    out.push({ name: n, ecosystem: "python", version: "", scope, used: false, evidence: "" });
+    out.push({
+      name: n,
+      ecosystem: "python",
+      version: "",
+      scope,
+      ...(pkgDir ? { package: pkgDir } : {}),
+      used: false,
+      evidence: "",
+    });
   };
   // dependencies = [ "requests>=2", ... ] (multi-line)
   for (const m of raw.matchAll(/dependencies\s*=\s*\[(.*?)\]/gs)) {
@@ -114,10 +122,9 @@ function parsePyproject(repoRoot: string): DepEntry[] {
       push(stripPySpecifier(sm[2]), "build-requires");
     }
   }
-  // [tool.poetry.dependencies] table: nama = "..." / nama = {version="..."}
-  const poetryMatch = raw.match(/\[tool\.poetry\.dependencies\]([\s\S]*?)(?:\n\[|$)/);
-  if (poetryMatch) {
-    for (const line of poetryMatch[1].split("\n")) {
+  // [tool.poetry.dependencies] & [tool.poetry.group.<g>.dependencies]
+  for (const m of raw.matchAll(/\[tool\.poetry(?:\.group\.[A-Za-z0-9_-]+)?\.dependencies\]([\s\S]*?)(?:\n\[|$)/g)) {
+    for (const line of m[1].split("\n")) {
       const t = line.trim();
       if (!t || t.startsWith("#") || t.startsWith("[")) continue;
       const kv = t.match(/^([A-Za-z0-9._-]+)\s*=/);
@@ -223,7 +230,7 @@ export function parseManifests(repoRoot: string): { manifests: string[]; deps: D
   const deps: DepEntry[] = [];
   const candidates: Array<[string, () => DepEntry[]]> = [
     ["package.json", () => parsePackageJsonAt(path.join(repoRoot, "package.json"))],
-    ["pyproject.toml", () => parsePyproject(repoRoot)],
+    ["pyproject.toml", () => parsePyprojectAt(path.join(repoRoot, "pyproject.toml"))],
     ["go.mod", () => parseGoModAt(path.join(repoRoot, "go.mod"))],
     ["Cargo.toml", () => parseCargoTomlAt(path.join(repoRoot, "Cargo.toml"))],
   ];
@@ -240,6 +247,7 @@ export function parseManifests(repoRoot: string): { manifests: string[]; deps: D
     if (!fs.existsSync(abs)) continue;
     manifests.push(ws.manifestRel);
     if (ws.ecosystem === "npm") deps.push(...parsePackageJsonAt(abs, ws.dir));
+    else if (ws.ecosystem === "python") deps.push(...parsePyprojectAt(abs, ws.dir));
     else if (ws.ecosystem === "go") deps.push(...parseGoModAt(abs, ws.dir));
     else if (ws.ecosystem === "rust") deps.push(...parseCargoTomlAt(abs, ws.dir));
   }

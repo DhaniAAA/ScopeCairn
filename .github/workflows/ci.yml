@@ -30,7 +30,7 @@ jobs:
 
       - name: Run Linter
         if: matrix.os == 'ubuntu-latest'
-        run: npm run lint
+        run: npm run lint -- --error-on-warnings
 
       - name: Run Typecheck
         run: npm run typecheck

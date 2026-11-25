@@ -73,6 +73,7 @@ export async function cmdScan(repoRoot: string, opts: ScanOptions = {}): Promise
       stats.lsp.tsserver ? "tsserver" : null,
       stats.lsp.gopls ? "gopls" : null,
       stats.lsp.pyright ? "pyright" : null,
+      stats.lsp.rustAnalyzer ? "rust-analyzer" : null,
     ].filter(Boolean);
     const upgNote = stats.lspUpgraded ? `, upgraded ${stats.lspUpgraded} edge(s)` : "";
     console.log(

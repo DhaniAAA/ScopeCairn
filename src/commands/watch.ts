@@ -1,10 +1,27 @@
 import fs from "node:fs";
-import path from "node:path";
 import { loadIgnoreRules, isIgnored } from "../ignore.js";
 import { refreshIndex } from "../refresh.js";
 
 export interface WatchOptions {
   debounce?: number;
+}
+
+const WATCH_IGNORED_SEGMENTS = new Set([
+  ".git",
+  ".scopecairn",
+  "node_modules",
+  "dist",
+  "build",
+  "target",
+  "coverage",
+  ".next",
+]);
+
+/** Cek apakah path relatif mengandung segmen internal/build yang selalu diabaikan watcher. */
+export function isWatchExcludedPath(relPosix: string): boolean {
+  const clean = relPosix.replace(/\\/g, "/").replace(/^\.\//, "");
+  if (!clean) return false;
+  return clean.split("/").some((seg) => WATCH_IGNORED_SEGMENTS.has(seg));
 }
 
 export async function cmdWatch(
@@ -32,7 +49,7 @@ export async function cmdWatch(
 
     try {
       const start = Date.now();
-      const { stats } = await refreshIndex(repoRoot);
+      const { stats } = await refreshIndex(repoRoot, { changedPaths: changedList });
       const elapsed = Date.now() - start;
       console.log(
         `[Watch] Re-indexed in ${elapsed}ms (+${stats.inserted} new, ~${stats.updated} updated, -${stats.removed} removed).\n`
@@ -48,22 +65,13 @@ export async function cmdWatch(
     }
   };
 
-  const watcher = fs.watch(repoRoot, { recursive: true }, (eventType, filename) => {
+  const watcher = fs.watch(repoRoot, { recursive: true }, (_eventType, filename) => {
     if (!filename) return;
 
     const relPosix = filename.replace(/\\/g, "/");
 
-    // Abaikan direktori internal & artefak build
-    if (
-      relPosix.startsWith(".git/") ||
-      relPosix.startsWith(".scopecairn/") ||
-      relPosix.startsWith("node_modules/") ||
-      relPosix.startsWith("dist/") ||
-      relPosix.startsWith("build/") ||
-      relPosix.startsWith("target/") ||
-      relPosix.startsWith("coverage/") ||
-      relPosix.startsWith(".next/")
-    ) {
+    // Abaikan direktori internal & artefak build di root maupun subpaket monorepo
+    if (isWatchExcludedPath(relPosix)) {
       return;
     }
 

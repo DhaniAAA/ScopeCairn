@@ -10,7 +10,9 @@ import { findDeadCode } from "../src/commands/dead.js";
 import { cmdScan } from "../src/commands/scan.js";
 import { cmdStatus } from "../src/commands/status.js";
 import { discoverWorkspaces, loadTsConfigForFile, resolveTsPathCandidates } from "../src/workspace.js";
-import { enrichRelationsWithLsp, resolveWithLsp } from "../src/extract/lsp.js";
+import { enrichRelationsWithLsp, resolveWithLsp, serverCommandForLanguage } from "../src/extract/lsp.js";
+import { isWatchExcludedPath } from "../src/commands/watch.js";
+import { refreshIndex } from "../src/refresh.js";
 
 function createMonorepoFixture(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sc-monorepo-"));
@@ -265,6 +267,205 @@ test("cmdScan --json dan cmdStatus --json menghasilkan JSON terstruktur yang val
     assert.ok(statusOut.symbols >= 1);
   } finally {
     console.log = origLog;
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("isWatchExcludedPath menyaring folder build/deps di subpaket monorepo dan refreshIndex changedPaths bekerja inkremental", async () => {
+  assert.equal(isWatchExcludedPath("node_modules/pkg/index.js"), true);
+  assert.equal(isWatchExcludedPath("apps/web/node_modules/react/index.js"), true);
+  assert.equal(isWatchExcludedPath("packages/ui/.next/server/app.js"), true);
+  assert.equal(isWatchExcludedPath("services/api/dist/main.js"), true);
+  assert.equal(isWatchExcludedPath("apps/web/src/page.tsx"), false);
+
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), "sc-watch-inc-"));
+  try {
+    fs.mkdirSync(path.join(repo, "src"), { recursive: true });
+    fs.writeFileSync(path.join(repo, "src", "keep.ts"), `export function keepFn(): number { return 1; }\n`, "utf8");
+    fs.writeFileSync(path.join(repo, "src", "edit.ts"), `export function oldFn(): number { return 2; }\n`, "utf8");
+    await scanRepository(repo);
+
+    // Tambah file baru, ubah edit.ts, hapus keep.ts
+    fs.writeFileSync(path.join(repo, "src", "added.ts"), `export function newFn(): number { return 3; }\n`, "utf8");
+    fs.writeFileSync(path.join(repo, "src", "edit.ts"), `export function updatedFn(): number { return 4; }\n`, "utf8");
+    fs.rmSync(path.join(repo, "src", "keep.ts"));
+
+    const res = await refreshIndex(repo, {
+      changedPaths: ["src/added.ts", "src/edit.ts", "src/keep.ts"],
+    });
+    assert.equal(res.stats.inserted, 1);
+    assert.equal(res.stats.updated, 1);
+    assert.equal(res.stats.removed, 1);
+
+    const db = openDb(repo);
+    try {
+      const paths = (db.prepare(`SELECT path FROM files ORDER BY path`).all() as { path: string }[]).map((r) => r.path);
+      assert.deepEqual(paths, ["src/added.ts", "src/edit.ts"]);
+    } finally {
+      db.close();
+    }
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("Python monorepo ([tool.uv.workspace]) ditemukan oleh discoverWorkspaces dan dipindai deps per paket", async () => {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), "sc-py-monorepo-"));
+  try {
+    fs.writeFileSync(
+      path.join(repo, "pyproject.toml"),
+      `[project]\nname = "py-root"\ndependencies = ["httpx>=0.27"]\n\n[tool.uv.workspace]\nmembers = ["services/*"]\nexclude = ["services/ignored"]\n`,
+      "utf8"
+    );
+    fs.mkdirSync(path.join(repo, "services", "billing"), { recursive: true });
+    fs.writeFileSync(
+      path.join(repo, "services", "billing", "pyproject.toml"),
+      `[project]\nname = "billing"\ndependencies = ["pydantic>=2.0", "unused-ml-lib>=1.0"]\n`,
+      "utf8"
+    );
+    fs.writeFileSync(
+      path.join(repo, "services", "billing", "app.py"),
+      `from pydantic import BaseModel\nclass Invoice(BaseModel):\n    total: int\n`,
+      "utf8"
+    );
+    fs.mkdirSync(path.join(repo, "services", "ignored"), { recursive: true });
+    fs.writeFileSync(
+      path.join(repo, "services", "ignored", "pyproject.toml"),
+      `[project]\nname = "ignored"\ndependencies = ["requests"]\n`,
+      "utf8"
+    );
+
+    const workspaces = discoverWorkspaces(repo);
+    assert.equal(workspaces.length, 1);
+    assert.equal(workspaces[0].ecosystem, "python");
+    assert.equal(workspaces[0].dir, "services/billing");
+
+    await scanRepository(repo);
+    const db = openDb(repo);
+    try {
+      const depsRes = findDependencies(db, repo);
+      assert.ok(depsRes.manifests.includes("pyproject.toml"));
+      assert.ok(depsRes.manifests.includes("services/billing/pyproject.toml"));
+      assert.ok(!depsRes.manifests.includes("services/ignored/pyproject.toml"));
+
+      const pydanticDep = depsRes.deps.find(
+        (d) => d.name === "pydantic" && d.package === "services/billing"
+      );
+      assert.equal(pydanticDep?.used, true);
+
+      const unusedDep = depsRes.deps.find(
+        (d) => d.name === "unused-ml-lib" && d.package === "services/billing"
+      );
+      assert.equal(unusedDep?.used, false);
+    } finally {
+      db.close();
+    }
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("LSP mendukung rust-analyzer dan fallback textDocument/typeDefinition untuk IMPLEMENTS/USES", async () => {
+  const rustSrv = serverCommandForLanguage("rust", {
+    tsserver: null,
+    gopls: null,
+    pyright: null,
+    rustAnalyzer: "/usr/bin/rust-analyzer",
+  });
+  assert.deepEqual(rustSrv, {
+    command: "/usr/bin/rust-analyzer",
+    args: [],
+    languageId: "rust",
+  });
+
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), "sc-lsp-types-"));
+  try {
+    fs.mkdirSync(path.join(repo, "src"), { recursive: true });
+    const traitAbs = path.join(repo, "src", "iface.ts");
+    fs.writeFileSync(traitAbs, `export interface Runner {\n  run(): void;\n}\n`, "utf8");
+    fs.writeFileSync(path.join(repo, "src", "other.ts"), `export interface Runner {\n  run(): void;\n}\n`, "utf8");
+    const implAbs = path.join(repo, "src", "worker.ts");
+    fs.writeFileSync(implAbs, `export class Worker implements Runner {\n  run(): void {}\n}\n`, "utf8");
+
+    const mockServerPath = path.join(repo, "mock-type-lsp.mjs");
+    const traitUri = new URL(`file:///${traitAbs.replace(/\\/g, "/")}`).href;
+    fs.writeFileSync(
+      mockServerPath,
+      [
+        `let buf = Buffer.alloc(0);`,
+        `function send(obj) {`,
+        `  const s = JSON.stringify(obj);`,
+        `  process.stdout.write("Content-Length: " + Buffer.byteLength(s, "utf8") + "\\r\\n\\r\\n" + s);`,
+        `}`,
+        `process.stdin.on("data", (chunk) => {`,
+        `  buf = Buffer.concat([buf, chunk]);`,
+        `  while (true) {`,
+        `    const idx = buf.indexOf("\\r\\n\\r\\n");`,
+        `    if (idx === -1) break;`,
+        `    const hdr = buf.slice(0, idx).toString("ascii");`,
+        `    const m = /Content-Length:\\s*(\\d+)/i.exec(hdr);`,
+        `    if (!m) { buf = buf.slice(idx + 4); continue; }`,
+        `    const len = parseInt(m[1], 10);`,
+        `    if (buf.length < idx + 4 + len) break;`,
+        `    const msg = JSON.parse(buf.slice(idx + 4, idx + 4 + len).toString("utf8"));`,
+        `    buf = buf.slice(idx + 4 + len);`,
+        `    if (msg.method === "initialize") send({ jsonrpc: "2.0", id: msg.id, result: { capabilities: {} } });`,
+        `    else if (msg.method === "textDocument/definition") send({ jsonrpc: "2.0", id: msg.id, result: [] });`,
+        `    else if (msg.method === "textDocument/typeDefinition") send({ jsonrpc: "2.0", id: msg.id, result: [{ uri: ${JSON.stringify(traitUri)}, range: { start: { line: 0, character: 17 }, end: { line: 0, character: 23 } } }] });`,
+        `    else if (msg.method === "shutdown") send({ jsonrpc: "2.0", id: msg.id, result: null });`,
+        `    else if (msg.method === "exit") process.exit(0);`,
+        `  }`,
+        `});`,
+      ].join("\n"),
+      "utf8"
+    );
+
+    await scanRepository(repo);
+    const db = openDb(repo);
+    try {
+      const workerFile = db.prepare(`SELECT id FROM files WHERE path = 'src/worker.ts'`).get() as { id: number };
+      const otherSym = db
+        .prepare(`SELECT s.id FROM symbols s JOIN files f ON f.id = s.file_id WHERE f.path = 'src/other.ts' AND s.name = 'Runner'`)
+        .get() as { id: number };
+      const ifaceSym = db
+        .prepare(`SELECT s.id FROM symbols s JOIN files f ON f.id = s.file_id WHERE f.path = 'src/iface.ts' AND s.name = 'Runner'`)
+        .get() as { id: number };
+      const workerSym = db
+        .prepare(`SELECT id FROM symbols WHERE file_id = ? AND name = 'Worker'`)
+        .get(workerFile.id) as { id: number };
+      db.prepare(
+        `INSERT INTO relationships(source_id, target_id, relationship_type, weight, confidence, evidence)
+         VALUES (?, ?, 'IMPLEMENTS', 0.8, 0.5, 'AMBIGUOUS')`
+      ).run(workerSym.id, otherSym.id);
+
+      const mockCmd = { command: process.execPath, args: [mockServerPath], languageId: "typescript" };
+      const upgraded = await enrichRelationsWithLsp(
+        db,
+        repo,
+        [
+          {
+            fileId: workerFile.id,
+            rel: "src/worker.ts",
+            content: fs.readFileSync(implAbs, "utf8"),
+            language: "typescript",
+          },
+        ],
+        { tsserver: null, gopls: null, pyright: null, rustAnalyzer: null },
+        { typescript: mockCmd }
+      );
+      assert.ok(upgraded >= 1);
+      const rel = db
+        .prepare(
+          `SELECT target_id, evidence FROM relationships
+           WHERE source_id = ? AND relationship_type = 'IMPLEMENTS' ORDER BY id DESC LIMIT 1`
+        )
+        .get(workerSym.id) as { target_id: number; evidence: string };
+      assert.equal(rel.target_id, ifaceSym.id);
+      assert.equal(rel.evidence, "EXTRACTED");
+    } finally {
+      db.close();
+    }
+  } finally {
     fs.rmSync(repo, { recursive: true, force: true });
   }
 });

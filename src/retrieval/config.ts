@@ -4,6 +4,11 @@ import { dataDir } from "../db.js";
 
 // Bobot ranking PRD FR-05 — hipotesis awal, dikalibrasi di Fase 6.
 // Dapat dioverride lewat `.scopecairn/config.yml` (format `key: value` sederhana).
+export interface CustomSecretRuleConfig {
+  label: string;
+  pattern: string;
+}
+
 export interface RetrievalConfig {
   wSeed: number;
   wProximity: number;
@@ -19,6 +24,8 @@ export interface RetrievalConfig {
   coverageThreshold: number;
   mutationEnabled: boolean;
   mutationThreshold: number;
+  secretsAllowlist: string[];
+  secretsRules: CustomSecretRuleConfig[];
 }
 
 export const DEFAULT_CONFIG: RetrievalConfig = {
@@ -35,26 +42,119 @@ export const DEFAULT_CONFIG: RetrievalConfig = {
   coverageThreshold: 80,
   mutationEnabled: false,
   mutationThreshold: 60,
+  secretsAllowlist: [],
+  secretsRules: [],
 };
 
-function parseSimpleYml(text: string): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const line of text.split("\n")) {
-    const t = line.trim();
-    if (!t || t.startsWith("#")) continue;
-    const i = t.indexOf(":");
-    if (i === -1) continue;
-    out[t.slice(0, i).trim()] = t.slice(i + 1).trim();
+function stripQuotes(s: string): string {
+  const t = s.trim();
+  if ((t.startsWith('"') && t.endsWith('"')) || (t.startsWith("'") && t.endsWith("'"))) {
+    return t.slice(1, -1);
   }
-  return out;
+  return t;
+}
+
+function parseInlineList(val: string): string[] {
+  const t = val.trim();
+  if (!t.startsWith("[") || !t.endsWith("]")) return [];
+  const inner = t.slice(1, -1).trim();
+  if (!inner) return [];
+  const items: string[] = [];
+  let cur = "";
+  let quote: string | null = null;
+  for (let i = 0; i < inner.length; i++) {
+    const ch = inner[i];
+    if (quote) {
+      if (ch === "\\" && i + 1 < inner.length) {
+        cur += inner[i + 1];
+        i++;
+      } else if (ch === quote) {
+        quote = null;
+      } else {
+        cur += ch;
+      }
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+    } else if (ch === ",") {
+      if (cur.trim()) items.push(stripQuotes(cur));
+      cur = "";
+    } else {
+      cur += ch;
+    }
+  }
+  if (cur.trim()) items.push(stripQuotes(cur));
+  return items;
+}
+
+function parseSimpleYml(text: string): {
+  kv: Record<string, string>;
+  lists: Record<string, string[]>;
+} {
+  const kv: Record<string, string> = {};
+  const lists: Record<string, string[]> = {};
+  let activeListKey: string | null = null;
+  for (const rawLine of text.split(/\r?\n/)) {
+    const t = rawLine.trim();
+    if (!t || t.startsWith("#")) continue;
+    if (activeListKey && t.startsWith("- ") && /^\s+/.test(rawLine)) {
+      lists[activeListKey].push(stripQuotes(t.slice(2)));
+      continue;
+    }
+    const i = t.indexOf(":");
+    if (i === -1) {
+      activeListKey = null;
+      continue;
+    }
+    const key = t.slice(0, i).trim();
+    const val = t.slice(i + 1).trim();
+    if (!val) {
+      activeListKey = key;
+      lists[key] = lists[key] ?? [];
+    } else if (val.startsWith("[") && val.endsWith("]")) {
+      activeListKey = null;
+      lists[key] = parseInlineList(val);
+    } else {
+      activeListKey = null;
+      kv[key] = stripQuotes(val);
+    }
+  }
+  return { kv, lists };
+}
+
+function parseSecretRuleEntry(raw: string): CustomSecretRuleConfig | null {
+  const t = raw.trim();
+  if (!t) return null;
+  if (t.startsWith("{")) {
+    try {
+      const obj = JSON.parse(t) as { label?: unknown; pattern?: unknown };
+      if (typeof obj.label === "string" && typeof obj.pattern === "string" && obj.pattern) {
+        return { label: obj.label, pattern: obj.pattern };
+      }
+    } catch {
+      return null;
+    }
+  }
+  const sep = t.indexOf("::");
+  if (sep > 0) {
+    const label = t.slice(0, sep).trim();
+    const pattern = t.slice(sep + 2).trim();
+    if (label && pattern) return { label, pattern };
+  }
+  return null;
 }
 
 export function loadConfig(repoRoot: string): RetrievalConfig {
-  const cfg = { ...DEFAULT_CONFIG };
+  const cfg: RetrievalConfig = {
+    ...DEFAULT_CONFIG,
+    secretsAllowlist: [],
+    secretsRules: [],
+  };
   const p = path.join(dataDir(repoRoot), "config.yml");
   if (!fs.existsSync(p)) return cfg;
   try {
-    const kv = parseSimpleYml(fs.readFileSync(p, "utf8"));
+    const { kv, lists } = parseSimpleYml(fs.readFileSync(p, "utf8"));
     const num = (k: string, cur: number): number => {
       const v = Number(kv[k]);
       return Number.isFinite(v) ? v : cur;
@@ -73,14 +173,22 @@ export function loadConfig(repoRoot: string): RetrievalConfig {
       0,
       Math.min(100, num("coverage_threshold", cfg.coverageThreshold))
     );
-    if (kv["mutation_enabled"] !== undefined) {
-      const rawMut = kv["mutation_enabled"].toLowerCase();
+    if (kv.mutation_enabled !== undefined) {
+      const rawMut = kv.mutation_enabled.toLowerCase();
       cfg.mutationEnabled = rawMut === "true" || rawMut === "1" || rawMut === "yes";
     }
     cfg.mutationThreshold = Math.max(
       0,
       Math.min(100, num("mutation_threshold", cfg.mutationThreshold))
     );
+    if (lists.secrets_allowlist) {
+      cfg.secretsAllowlist = lists.secrets_allowlist.filter(Boolean);
+    }
+    if (lists.secrets_rules) {
+      cfg.secretsRules = lists.secrets_rules
+        .map(parseSecretRuleEntry)
+        .filter((r): r is CustomSecretRuleConfig => r !== null);
+    }
   } catch {
     // corrupt config → defaults
   }

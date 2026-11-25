@@ -80,7 +80,7 @@ function globalSymbolId(
 // menampung semua `x.push(` sedunia — itu meracuni fan-in.
 function methodSymbolId(
   db: DatabaseSync,
-  fileId: number,
+  _fileId: number,
   ids: Map<string, number>,
   name: string
 ): number | null {

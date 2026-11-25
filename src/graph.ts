@@ -18,10 +18,10 @@ export interface GraphEdge {
 
 function asNode(r: Record<string, unknown>): GraphNode {
   return {
-    id: r["id"] as number,
-    name: r["name"] as string,
-    type: r["type"] as string,
-    file: (r["file"] as string) ?? "",
+    id: r.id as number,
+    name: r.name as string,
+    type: r.type as string,
+    file: (r.file as string) ?? "",
   };
 }
 
@@ -68,18 +68,18 @@ export function neighbors(
     .all(id) as Record<string, unknown>[];
   return [
     ...out.map((r) => ({
-      rel: r["rel"] as string,
-      weight: r["weight"] as number,
-      confidence: r["confidence"] as number,
-      evidence: (r["evidence"] as string) ?? "EXTRACTED",
+      rel: r.rel as string,
+      weight: r.weight as number,
+      confidence: r.confidence as number,
+      evidence: (r.evidence as string) ?? "EXTRACTED",
       other: asNode(r),
       direction: "out" as const,
     })),
     ...inn.map((r) => ({
-      rel: r["rel"] as string,
-      weight: r["weight"] as number,
-      confidence: r["confidence"] as number,
-      evidence: (r["evidence"] as string) ?? "EXTRACTED",
+      rel: r.rel as string,
+      weight: r.weight as number,
+      confidence: r.confidence as number,
+      evidence: (r.evidence as string) ?? "EXTRACTED",
       other: asNode(r),
       direction: "in" as const,
     })),

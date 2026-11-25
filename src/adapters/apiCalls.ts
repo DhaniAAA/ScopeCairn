@@ -329,7 +329,6 @@ export function deriveApiCalls(
       const normalized = normalizeApiPath(parsed.path);
       if (normalized) normRoutes.push({ id: r.id, method: parsed.method, normalized, rawPath: parsed.path });
     } catch {
-      continue;
     }
   }
   if (normRoutes.length === 0) return out;
@@ -369,7 +368,6 @@ export function deriveApiCalls(
       }
     } catch (err) {
       logError("adapters", err);
-      continue;
     }
   }
   return out;

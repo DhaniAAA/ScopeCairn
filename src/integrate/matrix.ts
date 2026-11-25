@@ -138,6 +138,36 @@ export const AGENT_MATRIX: AgentTarget[] = [
       },
     ],
   },
+  {
+    // Codex CLI membaca AGENTS.md sebagai project instructions dan skill di .agents/skills/.
+    id: "codex",
+    label: "Codex CLI",
+    rel: "AGENTS.md",
+    mode: "merge",
+    render: genericRuleMd,
+    presentMarker: ".codex",
+    extra: [
+      {
+        rel: ".agents/skills/scopecairn-knowledge/SKILL.md",
+        render: knowledgeSkillMd,
+      },
+    ],
+  },
+  {
+    // Gemini CLI membaca GEMINI.md sebagai project context dan skill di .gemini/skills/.
+    id: "gemini",
+    label: "Gemini CLI",
+    rel: "GEMINI.md",
+    mode: "merge",
+    render: genericRuleMd,
+    presentMarker: ".gemini",
+    extra: [
+      {
+        rel: ".gemini/skills/scopecairn-knowledge/SKILL.md",
+        render: knowledgeSkillMd,
+      },
+    ],
+  },
 ];
 
 export function findTarget(id: string): AgentTarget | undefined {

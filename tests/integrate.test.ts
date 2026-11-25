@@ -43,6 +43,8 @@ test("setiap target matrix punya knowledge skill di mekanisme native-nya", () =>
     kiro: ".kiro/skills/scopecairn-knowledge/SKILL.md",
     opencode: ".opencode/skills/scopecairn-knowledge/SKILL.md",
     qoder: ".qoder/skills/scopecairn-knowledge/SKILL.md",
+    codex: ".agents/skills/scopecairn-knowledge/SKILL.md",
+    gemini: ".gemini/skills/scopecairn-knowledge/SKILL.md",
   };
   for (const t of AGENT_MATRIX) {
     const files = t.extra ?? [];
@@ -323,6 +325,32 @@ test("qoder: rule selalu aktif di .qoder/rules dan knowledge skill di .qoder/ski
     assert.equal(out.how, "removed");
     assert.ok(!fs.existsSync(rulePath));
     assert.ok(!fs.existsSync(kPath));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("codex & gemini: install dan uninstall mengelola AGENTS.md / GEMINI.md dan knowledge skill dengan aman", () => {
+  const dir = tmpRepo();
+  try {
+    const gemini = findTarget("gemini")!;
+    fs.writeFileSync(path.join(dir, "GEMINI.md"), "# User Gemini Notes\n- keep me\n");
+    assert.equal(installTarget(dir, gemini, "scopecairn").how, "extended");
+    const geminiText = fs.readFileSync(path.join(dir, "GEMINI.md"), "utf8");
+    assert.ok(geminiText.includes("User Gemini Notes"));
+    assert.ok(geminiText.includes("<!-- scopecairn:managed -->"));
+    assert.ok(fs.existsSync(path.join(dir, ".gemini", "skills", "scopecairn-knowledge", "SKILL.md")));
+
+    assert.equal(uninstallTarget(dir, gemini).how, "removed");
+    const geminiAfter = fs.readFileSync(path.join(dir, "GEMINI.md"), "utf8");
+    assert.ok(geminiAfter.includes("User Gemini Notes"));
+    assert.ok(!geminiAfter.includes("<!-- scopecairn:managed -->"));
+
+    const codex = findTarget("codex")!;
+    assert.equal(installTarget(dir, codex, "scopecairn").how, "generated");
+    assert.ok(fs.readFileSync(path.join(dir, "AGENTS.md"), "utf8").includes("<!-- scopecairn:managed -->"));
+    assert.ok(fs.existsSync(path.join(dir, ".agents", "skills", "scopecairn-knowledge", "SKILL.md")));
+    assert.equal(uninstallTarget(dir, codex).how, "removed");
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

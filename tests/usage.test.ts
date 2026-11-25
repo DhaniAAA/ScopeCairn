@@ -8,6 +8,8 @@ import os from "node:os";
 import path from "node:path";
 import { collectUsage, renderUsage } from "../src/usage.js";
 import { cmdScan } from "../src/commands/scan.js";
+import { cmdRead } from "../src/commands/read.js";
+import { cmdContext } from "../src/commands/context.js";
 import { openDb } from "../src/db.js";
 
 function memDb(): DatabaseSync {
@@ -120,6 +122,38 @@ test("scan mencatat invocation agar loop bisa diukur", async () => {
       db.close();
     }
   } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("cmdRead dan cmdContext mencatat full_bytes vs returned_bytes serta collectUsage menghitung penghematan", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sc-savings-"));
+  const origLog = console.log;
+  try {
+    fs.mkdirSync(path.join(dir, "src"), { recursive: true });
+    const bigBody = Array.from({ length: 80 }, (_, i) => `export function fn${i}(): number { return ${i}; }`).join("\n");
+    fs.writeFileSync(path.join(dir, "src", "big.ts"), bigBody + "\n", "utf8");
+    await cmdScan(dir);
+
+    console.log = () => {};
+    cmdRead(dir, "symbol", "fn0", { json: true });
+    await cmdContext(dir, "fn0 calculation", { json: true, noRefresh: true });
+
+    const db = openDb(dir);
+    try {
+      const u = collectUsage(db);
+      assert.ok(u.savings.fullBytes > u.savings.returnedBytes);
+      assert.ok(u.savings.bytesSaved > 0);
+      assert.ok(u.savings.tokensSavedEst > 0);
+      assert.ok((u.savings.pctSaved ?? 0) > 0);
+      const rendered = renderUsage(u);
+      assert.ok(rendered.includes("Penghematan konteks:"));
+      assert.ok(rendered.includes("token"));
+    } finally {
+      db.close();
+    }
+  } finally {
+    console.log = origLog;
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });

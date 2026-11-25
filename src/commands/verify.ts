@@ -1,5 +1,5 @@
 import { openDb } from "../db.js";
-import { changedFilesVsBase, changedFilesVsHead } from "../retrieval/gitChanged.js";
+import { changedFilesVsBase, changedFilesVsHead, detectDefaultBaseRef } from "../retrieval/gitChanged.js";
 import { loadProtectedPatterns, isProtected } from "../scope/protected.js";
 import { computeTaskScope, loadPersistedScope } from "../scope/taskScope.js";
 import { refreshIndex } from "../refresh.js";
@@ -294,13 +294,39 @@ export function buildVerifySarif(result: VerifyResult, strict = true): SarifLog 
   return wrapSarifRun(results, usedRules);
 }
 
+function loadSymbolFilePaths(
+  db: ReturnType<typeof openDb>,
+  symbolIds: Iterable<number>
+): Map<number, string> {
+  const uniqueIds = [...new Set(symbolIds)];
+  const map = new Map<number, string>();
+  if (uniqueIds.length === 0) return map;
+  const CHUNK = 500;
+  for (let i = 0; i < uniqueIds.length; i += CHUNK) {
+    const slice = uniqueIds.slice(i, i + CHUNK);
+    const placeholders = slice.map(() => "?").join(",");
+    const rows = db
+      .prepare(
+        `SELECT s.id AS id, f.path AS p
+         FROM symbols s
+         JOIN files f ON f.id = s.file_id
+         WHERE s.id IN (${placeholders})`
+      )
+      .all(...slice) as { id: number; p: string }[];
+    for (const r of rows) {
+      map.set(r.id, r.p.replace(/\\/g, "/"));
+    }
+  }
+  return map;
+}
+
 /**
  * Agregat PR risk per file (reuse logika risk `impact`: protected / cycle /
  * fan-in). Tak melempar — skema lama menghasilkan LOW + alasan "tak terhitung".
  */
 export function computePrRisk(
   db: ReturnType<typeof openDb>,
-  repoRoot: string,
+  _repoRoot: string,
   changed: string[],
   base: string,
   patterns: ReturnType<typeof loadProtectedPatterns>,
@@ -309,20 +335,18 @@ export function computePrRisk(
   const cycleFiles = new Set<string>();
   try {
     const cycRows = db.prepare(`SELECT nodes_json AS js FROM cycles`).all() as { js: string }[];
+    const allCycleNodeIds: number[] = [];
     for (const c of cycRows) {
       try {
         const nodes = JSON.parse(c.js) as number[];
-        for (const id of nodes) {
-          const row = db
-            .prepare(
-              `SELECT f.path AS p FROM symbols s JOIN files f ON f.id = s.file_id WHERE s.id = ?`
-            )
-            .get(id) as { p: string } | undefined;
-          if (row) cycleFiles.add(row.p.replace(/\\/g, "/"));
-        }
+        for (const id of nodes) allCycleNodeIds.push(id);
       } catch {
         // abaikan cycle korup
       }
+    }
+    const pathBySym = loadSymbolFilePaths(db, allCycleNodeIds);
+    for (const p of pathBySym.values()) {
+      cycleFiles.add(p);
     }
   } catch {
     // tabel cycles tak ada di skema lama — abaikan
@@ -396,7 +420,7 @@ export async function runVerify(
     }
   }
 
-  const effectiveBase = opts.base ?? (opts.prRisk ? "origin/main" : undefined);
+  const effectiveBase = opts.base ?? (opts.prRisk ? detectDefaultBaseRef(repoRoot) : undefined);
   const baseResult = effectiveBase ? changedFilesVsBase(repoRoot, effectiveBase) : null;
   const changed = (
     baseResult ? baseResult.files : changedFilesVsHead(repoRoot)
@@ -472,21 +496,17 @@ export async function runVerify(
 
     // Dapatkan set file yang ada di changed
     const changedSet = new Set(changed);
+    const cycleSymPaths = loadSymbolFilePaths(
+      db,
+      cycles.flatMap((c) => c.nodeIds)
+    );
 
     for (const c of cycles) {
       const desc = describeCycle(db, c, 10);
-      let involvesChanged = false;
-      for (const nodeId of c.nodeIds) {
-        const row = db
-          .prepare(
-            `SELECT f.path AS path FROM symbols s JOIN files f ON f.id = s.file_id WHERE s.id = ?`
-          )
-          .get(nodeId) as { path: string } | undefined;
-        if (row && changedSet.has(row.path.replace(/\\/g, "/"))) {
-          involvesChanged = true;
-          break;
-        }
-      }
+      const involvesChanged = c.nodeIds.some((nodeId) => {
+        const p = cycleSymPaths.get(nodeId);
+        return p !== undefined && changedSet.has(p);
+      });
       detectedCycles.push({
         hash: c.hash,
         description: desc,
@@ -566,7 +586,7 @@ export async function runVerify(
     const arch = opts.arch && !opts.init ? checkArchitecture(repoRoot) : undefined;
 
     const prRisk = opts.prRisk
-      ? computePrRisk(db, repoRoot, changed, effectiveBase ?? "origin/main", patterns, Boolean(baseResult?.baseInvalid))
+      ? computePrRisk(db, repoRoot, changed, effectiveBase ?? detectDefaultBaseRef(repoRoot), patterns, Boolean(baseResult?.baseInvalid))
       : undefined;
 
     const newCycleViolations = detectedCycles.filter((c) => c.involvesChangedFiles);

@@ -135,7 +135,7 @@ export function parseSignatureHint(text: string): ParsedSignature {
   const after = clean.slice(parenEnd + 1).trim();
   let returnType: string | null = null;
   const retMatch = after.match(/^(?::|->|=>)\s*([A-Za-z0-9_<>[\]|.\s]+?)(?:\s*\{|\s*;|\s*$)/);
-  if (retMatch && retMatch[1]) {
+  if (retMatch?.[1]) {
     const norm = normalizeTypeToken(retMatch[1]);
     if (norm && norm !== "void") returnType = norm;
     else if (norm === "void") returnType = "void";
@@ -324,7 +324,7 @@ export function searchReuse(
         const normNb = normalizeTypeToken(nb.name);
         if (
           querySig.paramTypes.includes(normNb) ||
-          (querySig.returnType && querySig.returnType.includes(normNb))
+          querySig.returnType?.includes(normNb)
         ) {
           matchedNeighbors.push(nb.name);
         }

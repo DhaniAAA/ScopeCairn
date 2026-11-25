@@ -78,7 +78,7 @@ export function detectTestRunnerPlan(
   if (fs.existsSync(pkgPath)) {
     try {
       const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
-      const testScript = (pkg.scripts && pkg.scripts.test) || "";
+      const testScript = pkg.scripts?.test || "";
       if (testScript.includes("vitest")) {
         return planNpm("npx", ["vitest", "run", ...testFiles]);
       }
@@ -199,7 +199,6 @@ export function findAffectedTests(
 
     if (targetSymbols.length > 0) {
       const targetIds = targetSymbols.map((s) => s.id);
-      const targetIdSet = new Set(targetIds);
 
       // 1a. Relasi langsung: edge yang bersumber dari test file/symbol menuju target symbol
       // atau edge dari target symbol menuju test symbol

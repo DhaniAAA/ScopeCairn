@@ -167,6 +167,7 @@ CREATE TABLE relationships (source_id INTEGER, target_id INTEGER, relationship_t
 });
 
 test("calls_api normalizer menyamakan template dan route dinamis", () => {
+  // biome-ignore lint/suspicious/noTemplateCurlyInString: literal route template under test
   assert.equal(normalizeApiPath("/api/users/${id}"), "/api/users/{}");
   assert.equal(normalizeApiPath("/api/users/[id]"), "/api/users/{}");
   assert.equal(normalizeApiPath("/api/users/:id"), "/api/users/{}");
@@ -185,6 +186,7 @@ test("calls_api detector: fetch literal, template, axios.post, skip dinamis dan 
   );
   const raws = calls.map((c) => c.raw).sort();
   assert.ok(raws.includes("/api/health"));
+  // biome-ignore lint/suspicious/noTemplateCurlyInString: literal route template under test
   assert.ok(raws.includes("/api/users/${id}"));
   assert.ok(raws.includes("/api/orders"));
   assert.ok(!raws.includes("key"));

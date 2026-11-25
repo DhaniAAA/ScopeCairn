@@ -4,10 +4,9 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { detectTestRunner } from "../src/commands/testselect.js";
-import { checkArchitecture, initArchConfig } from "../src/commands/archcheck.js";
+import { checkArchitecture } from "../src/commands/archcheck.js";
 import { runVerify } from "../src/commands/verify.js";
 import { DEFINITION_OF_DONE } from "../src/scope/guard.js";
-import { computeStructuralDiff } from "../src/commands/diff.js";
 import { openDb } from "../src/db.js";
 
 test("detectTestRunner identifies package.json runners", () => {

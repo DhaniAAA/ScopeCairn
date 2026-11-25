@@ -362,7 +362,7 @@ export function buildContext(
   // ## Project Rules dan tidak memecah delimiter pemangkasan token.
   let rulesBlock = "";
   const rules = opts?.projectRules;
-  if (rules && rules.content) {
+  if (rules?.content) {
     rulesBlock =
       `## Project Rules\n\n` +
       `> Sumber: \`${rules.path}\` — konvensi proyek, berlaku untuk task ini.\n` +

@@ -2,6 +2,14 @@ import type { DatabaseSync } from "node:sqlite";
 
 // Laporan usage & compliance (PRD AI-5 / §18). Semua angka dibaca dari DB
 // lokal .scopecairn/ — tidak ada yang dikirim keluar mesin.
+export interface ContextSavings {
+  fullBytes: number;
+  returnedBytes: number;
+  bytesSaved: number;
+  tokensSavedEst: number;
+  pctSaved: number | null;
+}
+
 export interface UsageStats {
   total: number;
   firstAt: string | null;
@@ -13,6 +21,7 @@ export interface UsageStats {
   closedLoop: number;
   avgSymbolsPerTask: number | null;
   recentTasks: { description: string; symbols: number; closed: boolean }[];
+  savings: ContextSavings;
 }
 
 export function collectUsage(db: DatabaseSync): UsageStats {
@@ -55,6 +64,26 @@ export function collectUsage(db: DatabaseSync): UsageStats {
     )
     .all() as { description: string; symbols: number; closed: number }[];
 
+  let fullBytes = 0;
+  let returnedBytes = 0;
+  try {
+    const sav = db
+      .prepare(
+        `SELECT COALESCE(SUM(full_bytes), 0) AS fb, COALESCE(SUM(returned_bytes), 0) AS rb
+         FROM invocations WHERE full_bytes > 0`
+      )
+      .get() as { fb: number; rb: number } | undefined;
+    if (sav) {
+      fullBytes = Number(sav.fb ?? 0);
+      returnedBytes = Number(sav.rb ?? 0);
+    }
+  } catch {
+    // DB uji lama tanpa kolom full_bytes/returned_bytes
+  }
+  const bytesSaved = Math.max(0, fullBytes - returnedBytes);
+  const tokensSavedEst = Math.round(bytesSaved / 4);
+  const pctSaved = fullBytes > 0 ? Math.round((bytesSaved / fullBytes) * 100) : null;
+
   return {
     total: agg.n,
     firstAt: agg.a,
@@ -69,7 +98,20 @@ export function collectUsage(db: DatabaseSync): UsageStats {
       symbols: r.symbols,
       closed: r.closed === 1,
     })),
+    savings: {
+      fullBytes,
+      returnedBytes,
+      bytesSaved,
+      tokensSavedEst,
+      pctSaved,
+    },
   };
+}
+
+function fmtBytes(n: number): string {
+  if (n >= 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(2)} MB`;
+  if (n >= 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${n} B`;
 }
 
 export function renderUsage(u: UsageStats): string {
@@ -96,6 +138,13 @@ export function renderUsage(u: UsageStats): string {
   }
   if (u.avgSymbolsPerTask !== null) {
     lines.push(`Rata-rata simbol per task: ${u.avgSymbolsPerTask.toFixed(1)}`);
+  }
+  if (u.savings.fullBytes > 0) {
+    lines.push(
+      `Penghematan konteks: ${fmtBytes(u.savings.bytesSaved)} (~${u.savings.tokensSavedEst.toLocaleString("en-US")} token, ${u.savings.pctSaved ?? 0}%) — dikirim ${fmtBytes(u.savings.returnedBytes)} dari ${fmtBytes(u.savings.fullBytes)} ukuran file penuh`
+    );
+  } else {
+    lines.push("Penghematan konteks: belum ada data ukuran (context/read)");
   }
 
   if (u.recentTasks.length > 0) {

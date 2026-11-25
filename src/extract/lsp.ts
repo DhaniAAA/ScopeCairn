@@ -9,6 +9,7 @@ export interface LspStatus {
   tsserver: string | null;
   gopls: string | null;
   pyright: string | null;
+  rustAnalyzer?: string | null;
 }
 
 export interface LspServerCommand {
@@ -43,18 +44,24 @@ function whichBinary(name: string): string | null {
 
 /**
  * Deteksi LSP opsional di PATH: `typescript-language-server`/`tsserver`, `gopls`,
- * dan `pyright-langserver`/`pyright`. Selalu sukses (tidak melempar).
+ * `pyright-langserver`/`pyright`, dan `rust-analyzer`. Selalu sukses (tidak melempar).
  */
 export function detectLsp(): LspStatus {
   return {
     tsserver: whichBinary("typescript-language-server") ?? whichBinary("tsserver"),
     gopls: whichBinary("gopls"),
     pyright: whichBinary("pyright-langserver") ?? whichBinary("pyright"),
+    rustAnalyzer: whichBinary("rust-analyzer"),
   };
 }
 
 export function isLspAvailable(status: LspStatus): boolean {
-  return status.tsserver !== null || status.gopls !== null || status.pyright !== null;
+  return (
+    status.tsserver !== null ||
+    status.gopls !== null ||
+    status.pyright !== null ||
+    (status.rustAnalyzer ?? null) !== null
+  );
 }
 
 export function serverCommandForLanguage(
@@ -79,6 +86,9 @@ export function serverCommandForLanguage(
       return { command: status.pyright, args: ["--stdio"], languageId: "python" };
     }
     return null;
+  }
+  if (language === "rust" && status.rustAnalyzer) {
+    return { command: status.rustAnalyzer, args: [], languageId: "rust" };
   }
   return null;
 }
@@ -173,6 +183,7 @@ export class LspStdioClient {
       capabilities: {
         textDocument: {
           definition: { linkSupport: true },
+          typeDefinition: { linkSupport: true },
         },
       },
     });
@@ -190,16 +201,7 @@ export class LspStdioClient {
     });
   }
 
-  async definition(
-    absPath: string,
-    line0: number,
-    character0: number,
-    repoRoot: string
-  ): Promise<LspLocation | null> {
-    const res = await this.request("textDocument/definition", {
-      textDocument: { uri: pathToFileURL(path.resolve(absPath)).href },
-      position: { line: line0, character: character0 },
-    });
+  private parseLocationResult(res: unknown, repoRoot: string): LspLocation | null {
     const items = Array.isArray(res) ? res : res ? [res] : [];
     for (const item of items) {
       if (!item || typeof item !== "object") continue;
@@ -212,7 +214,7 @@ export class LspStdioClient {
       };
       const uri = obj.targetUri ?? obj.uri;
       const range = obj.targetSelectionRange ?? obj.range ?? obj.targetRange;
-      if (!uri || !uri.startsWith("file://")) continue;
+      if (!uri?.startsWith("file://")) continue;
       let fsPath: string;
       try {
         fsPath = fileURLToPath(uri);
@@ -228,6 +230,32 @@ export class LspStdioClient {
       };
     }
     return null;
+  }
+
+  async definition(
+    absPath: string,
+    line0: number,
+    character0: number,
+    repoRoot: string
+  ): Promise<LspLocation | null> {
+    const res = await this.request("textDocument/definition", {
+      textDocument: { uri: pathToFileURL(path.resolve(absPath)).href },
+      position: { line: line0, character: character0 },
+    });
+    return this.parseLocationResult(res, repoRoot);
+  }
+
+  async typeDefinition(
+    absPath: string,
+    line0: number,
+    character0: number,
+    repoRoot: string
+  ): Promise<LspLocation | null> {
+    const res = await this.request("textDocument/typeDefinition", {
+      textDocument: { uri: pathToFileURL(path.resolve(absPath)).href },
+      position: { line: line0, character: character0 },
+    });
+    return this.parseLocationResult(res, repoRoot);
   }
 
   async shutdown(): Promise<void> {
@@ -312,7 +340,9 @@ export async function resolveWithLsp(
           ? "go"
           : ext === ".py"
             ? "python"
-            : null;
+            : ext === ".rs"
+              ? "rust"
+              : null;
   if (!lang) return null;
 
   const status = lspStatus ?? detectLsp();
@@ -342,7 +372,8 @@ export async function resolveWithLsp(
 }
 
 /**
- * Tingkatkan edge `CALLS` berstatus `AMBIGUOUS` menggunakan LSP `textDocument/definition`
+ * Tingkatkan edge `CALLS`, `USES`, dan `IMPLEMENTS` berstatus `AMBIGUOUS`/`INFERRED`
+ * menggunakan LSP (`textDocument/definition` & `textDocument/typeDefinition`)
  * untuk file-file yang berubah. Best-effort: kegagalan LSP tidak pernah menggagalkan scan.
  */
 export async function enrichRelationsWithLsp(
@@ -376,16 +407,22 @@ export async function enrichRelationsWithLsp(
 
         const ambigRows = db
           .prepare(
-            `SELECT r.id AS relId, s.start_line AS startLine, s.end_line AS endLine,
+            `SELECT r.id AS relId, r.relationship_type AS relType,
+                    s.start_line AS startLine, s.end_line AS endLine,
                     t.id AS currentTargetId, t.name AS targetName
              FROM relationships r
              JOIN symbols s ON s.id = r.source_id
              JOIN symbols t ON t.id = r.target_id
-             WHERE s.file_id = ? AND r.relationship_type = 'CALLS' AND r.evidence = 'AMBIGUOUS'
-             LIMIT 40`
+             WHERE s.file_id = ?
+               AND (
+                 (r.relationship_type = 'CALLS' AND r.evidence = 'AMBIGUOUS')
+                 OR (r.relationship_type IN ('USES', 'IMPLEMENTS') AND r.evidence IN ('AMBIGUOUS', 'INFERRED'))
+               )
+             LIMIT 100`
           )
           .all(f.fileId) as Array<{
           relId: number;
+          relType: string;
           startLine: number;
           endLine: number;
           currentTargetId: number;
@@ -403,6 +440,9 @@ export async function enrichRelationsWithLsp(
           let loc: LspLocation | null = null;
           try {
             loc = await client.definition(abs, pos.line0, pos.character0, repoRoot);
+            if (!loc && (row.relType === "USES" || row.relType === "IMPLEMENTS")) {
+              loc = await client.typeDefinition(abs, pos.line0, pos.character0, repoRoot);
+            }
           } catch {
             continue;
           }

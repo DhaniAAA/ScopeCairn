@@ -6,7 +6,7 @@ import path from "node:path";
 import { scanRepository } from "../src/scanner.js";
 import { openDb } from "../src/db.js";
 import { searchReuse, parseSignatureHint, cmdReuse } from "../src/commands/reuse.js";
-import { findDeadCode, cmdDead } from "../src/commands/dead.js";
+import { findDeadCode, filterDeadByConfidence, cmdDead } from "../src/commands/dead.js";
 
 function createFixtureProject(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sc-reuse-dead-"));
@@ -337,5 +337,46 @@ test("CLI output --json untuk cmdReuse dan cmdDead menghasilkan JSON terstruktur
     assert.ok(Array.isArray(parsedDead.findings));
   } finally {
     console.log = origLog;
+  }
+});
+
+test("filterDeadByConfidence dan cmdDead --confidence menyaring temuan sesuai level minimum", async () => {
+  const dir = createFixtureProject();
+  const logs: string[] = [];
+  const origLog = console.log;
+  try {
+    await scanRepository(dir);
+    const db = openDb(dir);
+    try {
+      const full = findDeadCode(db, dir);
+      assert.ok(full.byConfidence.high >= 1);
+      assert.ok(full.byConfidence.medium >= 1);
+      assert.ok(full.byConfidence.low >= 1);
+
+      const onlyHigh = filterDeadByConfidence(full, "high");
+      assert.equal(onlyHigh.byConfidence.medium, 0);
+      assert.equal(onlyHigh.byConfidence.low, 0);
+      assert.ok(onlyHigh.findings.every((f) => f.confidence === "high"));
+
+      const medUp = filterDeadByConfidence(full, "medium");
+      assert.equal(medUp.byConfidence.low, 0);
+      assert.ok(medUp.findings.every((f) => f.confidence !== "low"));
+    } finally {
+      db.close();
+    }
+
+    console.log = (...args: unknown[]) => logs.push(args.map(String).join(" "));
+    await cmdDead(dir, { confidence: "high", json: true, noRefresh: true });
+    const parsed = JSON.parse(logs[0]) as {
+      byConfidence: { high: number; medium: number; low: number };
+      findings: Array<{ confidence: string }>;
+    };
+    assert.ok(parsed.byConfidence.high >= 1);
+    assert.equal(parsed.byConfidence.medium, 0);
+    assert.equal(parsed.byConfidence.low, 0);
+    assert.ok(parsed.findings.every((f) => f.confidence === "high"));
+  } finally {
+    console.log = origLog;
+    fs.rmSync(dir, { recursive: true, force: true });
   }
 });

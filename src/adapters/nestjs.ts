@@ -6,7 +6,7 @@ import type {
   AdapterResult,
   FrameworkAdapter,
 } from "./types.js";
-import { ensureAdapterSymbol, fileSymbolOf, insertRelation, findSymbolId } from "./types.js";
+import { ensureAdapterSymbol, fileSymbolOf, insertRelation } from "./types.js";
 
 // Adapter NestJS: Deteksi decorator @Controller('prefix'),
 // @Get('path'), @Post('path'), @Put(), @Delete(), @Patch(), @Injectable().
@@ -26,7 +26,7 @@ export function parseNestRoutes(content: string): NestRoute[] {
   // 1. Ekstrak prefix controller bila ada: @Controller('api/v1') atau @Controller()
   let controllerPrefix = "";
   const controllerMatch = content.match(/@Controller\s*\(\s*(?:['"`]([^'"`]*)['"`])?\s*\)/);
-  if (controllerMatch && controllerMatch[1]) {
+  if (controllerMatch?.[1]) {
     controllerPrefix = controllerMatch[1].trim();
     if (controllerPrefix.startsWith("/")) controllerPrefix = controllerPrefix.slice(1);
     if (controllerPrefix.endsWith("/")) controllerPrefix = controllerPrefix.slice(0, -1);

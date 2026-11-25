@@ -6,6 +6,7 @@ import { AGENT_MATRIX, findTarget, parseAgentsOption, type AgentTarget } from ".
 import { installAntigravity, installTarget, allowlistText } from "../integrate/install.js";
 import { ensureSessionGitignored } from "./session.js";
 import { BYPASS_LIMITATION_NOTE } from "../scope/testGate.js";
+import { detectDefaultBaseRef } from "../retrieval/gitChanged.js";
 
 export interface InitOptions {
   agents?: string;
@@ -47,10 +48,20 @@ jobs:
 export const HOOK_MARKER_START = "# scopecairn:managed-hook";
 export const HOOK_MARKER_END = "# /scopecairn:managed-hook";
 
+export function renderCiWorkflow(
+  prefix = "scopecairn",
+  baseRef = "origin/main"
+): string {
+  return CI_WORKFLOW_TEMPLATE
+    .replace(/scopecairn verify/g, `${prefix} verify`)
+    .replace(/--base origin\/main/g, `--base ${baseRef}`);
+}
+
 export function installCiWorkflow(repoRoot: string, prefix = detectPrefix(repoRoot)): string {
   const outPath = path.join(repoRoot, ...CI_WORKFLOW_REL.split("/"));
   fs.mkdirSync(path.dirname(outPath), { recursive: true });
-  const body = CI_WORKFLOW_TEMPLATE.replace(/scopecairn verify/g, `${prefix} verify`);
+  const baseRef = detectDefaultBaseRef(repoRoot, { preferOrigin: true });
+  const body = renderCiWorkflow(prefix, baseRef);
   fs.writeFileSync(outPath, body, "utf8");
   return `CI workflow installed (${CI_WORKFLOW_REL})`;
 }
@@ -61,10 +72,11 @@ export function installPreCommitHook(repoRoot: string, prefix = detectPrefix(rep
   const hooksDir = path.join(gitDir, "hooks");
   fs.mkdirSync(hooksDir, { recursive: true });
   const hookPath = path.join(hooksDir, "pre-commit");
+  const baseRef = detectDefaultBaseRef(repoRoot, { preferOrigin: true });
   const block = [
     HOOK_MARKER_START,
     `# Catatan: agen dapat melewati hook lokal dengan --no-verify; jalankan pemeriksaan yang sama di CI:`,
-    `#   ${prefix} verify --test-gate --base origin/main`,
+    `#   ${prefix} verify --test-gate --base ${baseRef}`,
     `${prefix} verify --no-strict --test-gate`,
     HOOK_MARKER_END,
   ].join("\n");

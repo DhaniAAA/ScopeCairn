@@ -112,8 +112,8 @@ export function detectGateRunner(repoRoot: string): SupportedGateRunner {
       if (/\b(?:node|tsx)\s+[^\n]*--test\b/.test(testScript)) return "node";
 
       const deps = { ...pkg.dependencies, ...pkg.devDependencies };
-      if (deps["vitest"]) return "vitest";
-      if (deps["jest"] || pkg.jest !== undefined) return "jest";
+      if (deps.vitest) return "vitest";
+      if (deps.jest || pkg.jest !== undefined) return "jest";
     } catch {
       // ignore invalid package.json
     }
@@ -390,7 +390,7 @@ function parseV8Coverage(repoRoot: string): Map<string, Map<number, number>> | n
         };
         if (!Array.isArray(raw.result)) continue;
         for (const script of raw.result) {
-          if (!script.url || !script.url.startsWith("file://")) continue;
+          if (!script.url?.startsWith("file://")) continue;
           let fsPath: string;
           try {
             fsPath = fileURLToPath(script.url);

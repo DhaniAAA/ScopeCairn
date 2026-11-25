@@ -20,7 +20,7 @@ export function detectPrefix(repoRoot: string): "scopecairn" | "npx scopecairn" 
     const pkg = JSON.parse(
       fs.readFileSync(path.join(repoRoot, "package.json"), "utf8")
     ) as { dependencies?: Record<string, string>; devDependencies?: Record<string, string> };
-    if (pkg.dependencies?.["scopecairn"] || pkg.devDependencies?.["scopecairn"]) {
+    if (pkg.dependencies?.scopecairn || pkg.devDependencies?.scopecairn) {
       return "npx scopecairn";
     }
   } catch {

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { openDb } from "../db.js";
-import { logInvocation } from "../invocations.js";
+import { logInvocation, recordInvocationSavings } from "../invocations.js";
 import { findSymbols, type GraphNode } from "../graph.js";
 
 export interface ReadOptions {
@@ -69,13 +69,35 @@ export function cmdRead(
 
   const db = openDb(repoRoot);
   try {
-    logInvocation(db, "read");
+    const invId = logInvocation(db, "read");
+    const fileFullBytes = new Map<string, number>();
+    let returnedBytes = 0;
+    const trackEntry = (entry: (ReadEntry & { fullFileBytes?: number }) | ReadError): void => {
+      if ("error" in entry) return;
+      if (entry.fullFileBytes && !fileFullBytes.has(entry.file)) {
+        fileFullBytes.set(entry.file, entry.fullFileBytes);
+      }
+      returnedBytes += Buffer.byteLength(entry.excerpt, "utf8");
+    };
+    const flushSavings = (): void => {
+      let totalFull = 0;
+      for (const b of fileFullBytes.values()) totalFull += b;
+      recordInvocationSavings(db, invId, totalFull, returnedBytes);
+    };
+
     if (opts.json) {
       if (multi) {
-        const out = names.map((n) => readOne(db, repoRoot, n, opts));
+        const entries = names.map((n) => readOne(db, repoRoot, n, opts));
+        for (const e of entries) trackEntry(e);
+        flushSavings();
+        const out = entries.map((e) =>
+          "error" in e ? e : { name: e.name, type: e.type, file: e.file, range: e.range, excerpt: e.excerpt, ...(e.callers ? { callers: e.callers } : {}) }
+        );
         console.log(JSON.stringify(out, null, 2));
       } else {
         const entry = readOne(db, repoRoot, names[0]!, opts);
+        trackEntry(entry);
+        flushSavings();
         // Pertahankan bentuk tunggal lama: error berisi {kind,name,error},
         // sukses berisi {name,type,file,range,excerpt[,callers]}.
         if ("error" in entry) {
@@ -83,7 +105,15 @@ export function cmdRead(
             JSON.stringify({ kind, name: names[0]!, error: entry.error }, null, 2)
           );
         } else {
-          console.log(JSON.stringify(entry, null, 2));
+          const clean: ReadEntry = {
+            name: entry.name,
+            type: entry.type,
+            file: entry.file,
+            range: entry.range,
+            excerpt: entry.excerpt,
+            ...(entry.callers ? { callers: entry.callers } : {}),
+          };
+          console.log(JSON.stringify(clean, null, 2));
         }
       }
       return;
@@ -91,6 +121,7 @@ export function cmdRead(
     names.forEach((n, i) => {
       if (i > 0) console.log("");
       const entry = readOne(db, repoRoot, n, opts);
+      trackEntry(entry);
       if ("error" in entry) {
         console.log(entry.error);
         return;
@@ -104,6 +135,7 @@ export function cmdRead(
         for (const c of callers) console.log(`  ${c.name} (${c.type}, ${c.file})`);
       }
     });
+    flushSavings();
   } finally {
     db.close();
   }
@@ -115,7 +147,7 @@ function readOne(
   repoRoot: string,
   name: string,
   opts: ReadOptions
-): ReadEntry | ReadError {
+): (ReadEntry & { fullFileBytes?: number }) | ReadError {
   const hits = findSymbols(db, name);
   const node: GraphNode | undefined =
     hits.find((h) => h.name === name && h.type !== "file") ??
@@ -125,14 +157,17 @@ function readOne(
     return { kind: "symbol", name, error: `No symbol matching "${name}".` };
   }
   const abs = path.join(repoRoot, node.file);
+  let rawFile: string;
   let lines: string[];
   try {
-    lines = fs.readFileSync(abs, "utf8").split("\n");
+    rawFile = fs.readFileSync(abs, "utf8");
+    lines = rawFile.split("\n");
   } catch {
     // Pesan error disamakan dengan jalur symbol-not-found agar multi-symbol
     // tetap bisa dilanjutkan; bentuk teks tunggal lama ikut cocok.
     return { kind: "symbol", name, error: `Cannot read ${node.file}.` };
   }
+  const fullFileBytes = Buffer.byteLength(rawFile, "utf8");
   const row = db
     .prepare(`SELECT start_line, end_line FROM symbols WHERE id = ?`)
     .get(node.id) as { start_line: number; end_line: number };
@@ -169,12 +204,13 @@ function readOne(
     excerpt = lines.slice(start - 1, end).join("\n");
   }
 
-  const entry: ReadEntry = {
+  const entry: ReadEntry & { fullFileBytes?: number } = {
     name: node.name,
     type: node.type,
     file: node.file,
     range: `${start}-${end}`,
     excerpt,
+    fullFileBytes,
   };
   if (opts.withCallers === true) {
     entry.callers = readCallers(db, node.id);

@@ -11,7 +11,9 @@ import {
   buildContextPayload,
   resolveEffectiveMode,
 } from "../src/retrieval/contextBuilder.js";
-import { PRUNE_SECTIONS } from "../src/commands/context.js";
+import { execFileSync } from "node:child_process";
+import { scanRepository } from "../src/scanner.js";
+import { PRUNE_SECTIONS, cmdContext, packContextToTokenBudget } from "../src/commands/context.js";
 import { installPreCommitHook, uninstallPreCommitHook } from "../src/commands/init.js";
 import { DEFAULT_CONFIG } from "../src/retrieval/config.js";
 
@@ -364,5 +366,109 @@ test("installPreCommitHook dan uninstallPreCommitHook mengelola .git/hooks/pre-c
     assert.ok(!cleaned.includes("scopecairn verify"));
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("packContextToTokenBudget memangkas micro-excerpt dan MEDIUM sebelum Key Symbols & Scope", () => {
+  const sample = [
+    "# Task Context",
+    "",
+    "## Task",
+    "fix auth token verification",
+    "",
+    "## Complexity",
+    "COMPLEX (3 file relevan)",
+    "",
+    "## Relevant Files",
+    "### HIGH",
+    "- src/auth/verify.ts",
+    "### MEDIUM",
+    "- src/low1.ts",
+    "- src/low2.ts",
+    "- src/low3.ts",
+    "",
+    "## Key Symbols",
+    "- `verifyJwt` (`src/auth/verify.ts:10-40`) — `export function verifyJwt(token: string): boolean`",
+    "- `decodePayload` (`src/auth/verify.ts:42-70`) — `export function decodePayload(raw: string): Record<string, unknown>`",
+    "- `helperLow` (`src/low1.ts:1-10`) — `export function helperLow()`",
+    "",
+    "## Key Excerpts",
+    "### verifyJwt (`src/auth/verify.ts:10-30`)",
+    "```",
+    "export function verifyJwt(token: string): boolean {",
+    "  // " + "x".repeat(260),
+    "  return true;",
+    "}",
+    "```",
+    "### helperLow (`src/low1.ts:1-10`)",
+    "```",
+    "export function helperLow() {",
+    "  // " + "y".repeat(260),
+    "}",
+    "```",
+    "",
+    "## Analogi riwayat",
+    "- `abc1234` (2026-10-01): old auth fix " + "z".repeat(160),
+    "",
+    "## Scope",
+    "- **Required**: src/auth/verify.ts",
+  ].join("\n");
+
+  const packed = packContextToTokenBudget(sample, 170);
+  assert.ok(packed.includes("## Key Symbols"), "Key Symbols harus dipertahankan");
+  assert.ok(packed.includes("verifyJwt"), "Signature simbol teratas harus dipertahankan");
+  assert.ok(packed.includes("## Scope"), "Scope harus dipertahankan");
+  assert.ok(!packed.includes("Analogi riwayat"), "Analogi riwayat harus dipangkas lebih dulu");
+  assert.ok(!packed.includes("y".repeat(40)), "Excerpt berprioritas rendah harus dipangkas");
+  assert.ok(packed.includes("## Note"));
+});
+
+test("cmdContext --from-diff mengambil perubahan git aktif sebagai seed otomatis tanpa argumen task", async () => {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), "sc-from-diff-"));
+  const origLog = console.log;
+  const origErr = console.error;
+  const logs: string[] = [];
+  try {
+    execFileSync("git", ["init"], { cwd: repo, stdio: "ignore" });
+    execFileSync("git", ["config", "user.email", "t@example.com"], { cwd: repo, stdio: "ignore" });
+    execFileSync("git", ["config", "user.name", "Tester"], { cwd: repo, stdio: "ignore" });
+    fs.mkdirSync(path.join(repo, "src"), { recursive: true });
+    fs.writeFileSync(
+      path.join(repo, "src", "billing.ts"),
+      `export function calculateTotal(price: number): number {\n  return price;\n}\n`,
+      "utf8"
+    );
+    fs.writeFileSync(
+      path.join(repo, "src", "unrelated.ts"),
+      `export function unusedUtil(): number {\n  return 0;\n}\n`,
+      "utf8"
+    );
+    execFileSync("git", ["add", "."], { cwd: repo, stdio: "ignore" });
+    execFileSync("git", ["commit", "-m", "init"], { cwd: repo, stdio: "ignore" });
+    await scanRepository(repo);
+
+    // Ubah src/billing.ts di working tree
+    fs.writeFileSync(
+      path.join(repo, "src", "billing.ts"),
+      `export function calculateTotal(price: number, tax = 0.1): number {\n  return price * (1 + tax);\n}\n`,
+      "utf8"
+    );
+
+    console.log = (...args: unknown[]) => logs.push(args.map(String).join(" "));
+    console.error = () => {};
+    await cmdContext(repo, "", { fromDiff: true, json: true });
+
+    const payload = JSON.parse(logs.join("\n")) as {
+      empty: boolean;
+      task: string;
+      symbols: Array<{ name: string; file: string }>;
+    };
+    assert.equal(payload.empty, false);
+    assert.ok(payload.task.includes("src/billing.ts"));
+    assert.ok(payload.symbols.some((s) => s.file === "src/billing.ts"));
+  } finally {
+    console.log = origLog;
+    console.error = origErr;
+    fs.rmSync(repo, { recursive: true, force: true });
   }
 });

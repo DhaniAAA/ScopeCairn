@@ -20,6 +20,7 @@ export interface DeadOptions {
   json?: boolean;
   noRefresh?: boolean;
   refresh?: boolean;
+  confidence?: DeadConfidence;
 }
 
 export interface DeadFinding {
@@ -344,10 +345,46 @@ export function findDeadCode(db: DatabaseSync, repoRoot: string): DeadResult {
   };
 }
 
+const DEAD_CONFIDENCE_RANK: Record<DeadConfidence, number> = {
+  high: 2,
+  medium: 1,
+  low: 0,
+};
+
+/** Saring hasil dead code berdasarkan ambang confidence minimum (`high` | `medium` | `low`). */
+export function filterDeadByConfidence(
+  res: DeadResult,
+  minConfidence: DeadConfidence
+): DeadResult {
+  const minRank = DEAD_CONFIDENCE_RANK[minConfidence];
+  const findings = res.findings.filter(
+    (f) => DEAD_CONFIDENCE_RANK[f.confidence] >= minRank
+  );
+  return {
+    total: findings.length,
+    byConfidence: {
+      high: findings.filter((f) => f.confidence === "high").length,
+      medium: findings.filter((f) => f.confidence === "medium").length,
+      low: findings.filter((f) => f.confidence === "low").length,
+    },
+    findings,
+  };
+}
+
 export async function cmdDead(
   repoRoot: string,
   opts: DeadOptions = {}
 ): Promise<void> {
+  const rawConf = opts.confidence?.toLowerCase();
+  if (rawConf && rawConf !== "high" && rawConf !== "medium" && rawConf !== "low") {
+    console.error(
+      `Nilai --confidence tidak valid: "${opts.confidence}". Pilih: high, medium, atau low.`
+    );
+    process.exitCode = 1;
+    return;
+  }
+  const minConfidence = (rawConf as DeadConfidence | undefined) ?? "low";
+
   if (!skipRefresh(opts)) {
     try {
       await refreshIndex(repoRoot);
@@ -359,7 +396,7 @@ export async function cmdDead(
   const db = openDb(repoRoot);
   try {
     logInvocation(db, "dead");
-    const res = findDeadCode(db, repoRoot);
+    const res = filterDeadByConfidence(findDeadCode(db, repoRoot), minConfidence);
 
     if (opts.json) {
       console.log(JSON.stringify(res, null, 2));

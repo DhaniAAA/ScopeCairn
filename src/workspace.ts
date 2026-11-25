@@ -231,9 +231,40 @@ function parseCargoWorkspaceMembers(repoRoot: string): string[] {
   }
 }
 
+function parsePythonWorkspaces(repoRoot: string): string[] {
+  const p = path.join(repoRoot, "pyproject.toml");
+  if (!fs.existsSync(p)) return [];
+  try {
+    const raw = fs.readFileSync(p, "utf8");
+    const patterns: string[] = [];
+    const uvWs = /\[tool\.uv\.workspace\]([\s\S]*?)(?:\n\[|$)/.exec(raw);
+    if (uvWs) {
+      const membersMatch = /members\s*=\s*\[([\s\S]*?)\]/.exec(uvWs[1]);
+      if (membersMatch) {
+        for (const sm of membersMatch[1].matchAll(/(["'])(.*?)\1/g)) {
+          if (sm[2]) patterns.push(sm[2]);
+        }
+      }
+      const excludeMatch = /exclude\s*=\s*\[([\s\S]*?)\]/.exec(uvWs[1]);
+      if (excludeMatch) {
+        for (const sm of excludeMatch[1].matchAll(/(["'])(.*?)\1/g)) {
+          if (sm[2]) patterns.push(`!${sm[2]}`);
+        }
+      }
+    }
+    for (const m of raw.matchAll(/path\s*=\s*(["'])([^"']+)\1/g)) {
+      const dir = toPosix(m[2]);
+      if (dir && dir !== ".") patterns.push(dir);
+    }
+    return patterns;
+  } catch {
+    return [];
+  }
+}
+
 /**
  * Temukan semua workspace package di monorepo (`package.json#workspaces`,
- * `pnpm-workspace.yaml`, `go.work`, `Cargo.toml [workspace]`).
+ * `pnpm-workspace.yaml`, `go.work`, `Cargo.toml [workspace]`, `pyproject.toml [tool.uv.workspace]`).
  */
 export function discoverWorkspaces(repoRoot: string): WorkspacePackage[] {
   const pkgs: WorkspacePackage[] = [];
@@ -277,6 +308,14 @@ export function discoverWorkspaces(repoRoot: string): WorkspacePackage[] {
     if (!fs.existsSync(path.join(repoRoot, ...manifestRel.split("/")))) continue;
     seenManifests.add(manifestRel);
     pkgs.push({ name: path.posix.basename(dir), dir, manifestRel, ecosystem: "rust" });
+  }
+
+  for (const dir of collectWorkspaceDirsFromGlobs(repoRoot, parsePythonWorkspaces(repoRoot))) {
+    const manifestRel = `${dir}/pyproject.toml`;
+    if (seenManifests.has(manifestRel)) continue;
+    if (!fs.existsSync(path.join(repoRoot, ...manifestRel.split("/")))) continue;
+    seenManifests.add(manifestRel);
+    pkgs.push({ name: path.posix.basename(dir), dir, manifestRel, ecosystem: "python" });
   }
 
   return pkgs;

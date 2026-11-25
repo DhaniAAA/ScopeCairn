@@ -1,9 +1,7 @@
 import { Command, InvalidOptionArgumentError } from "commander";
-import fs from "node:fs";
 import path from "node:path";
 import { cmdScan } from "./commands/scan.js";
 import { cmdStatus } from "./commands/status.js";
-import { cmdDoctor } from "./commands/doctor.js";
 import { cmdGraph } from "./commands/graph.js";
 import { cmdPath } from "./commands/path.js";
 import { cmdExport } from "./commands/export.js";
@@ -14,13 +12,11 @@ import { cmdHistory } from "./commands/history.js";
 import { cmdImpact } from "./commands/impact.js";
 import { cmdInit } from "./commands/init.js";
 import { cmdBenchmark } from "./commands/benchmark.js";
-import { cmdDashboard } from "./commands/dashboard.js";
 import { cmdTestSelect } from "./commands/testselect.js";
 import { cmdVerify } from "./commands/verify.js";
 import { cmdDiff } from "./commands/diff.js";
 import { cmdDeps } from "./commands/deps.js";
 import { cmdArchCheck } from "./commands/archcheck.js";
-import { cmdWatch } from "./commands/watch.js";
 import { cmdUpdate } from "./commands/update.js";
 import { cmdDecide } from "./commands/decide.js";
 import { cmdReuse } from "./commands/reuse.js";
@@ -38,7 +34,7 @@ import pkg from "../package.json" with { type: "json" };
  * yang lalu lolos ke `setTimeout(fn, NaN)` (0 ms → scan storm) dan
  * `slice(0, NaN)` (hasil kosong). Input buruk ditolak di sini, bukan diam.
  */
-function intArg(value: string, previous: number): number {
+function intArg(value: string, _previous: number): number {
   const n = Number.parseInt(value, 10);
   if (!Number.isFinite(n)) {
     throw new InvalidOptionArgumentError(`expected integer, got "${value}"`);
@@ -101,7 +97,7 @@ program
   .option("--watch", "watch repository files and auto-refresh index in background")
   .option("--debounce <ms>", "debounce time in milliseconds for watch mode (default 300)", intArg)
   .option("--changed-only", "hanya proses file yang berubah menurut git (+ file baru belum terindeks)")
-  .option("--lsp", "deteksi dan resolusi simbol via LSP opsional (typescript-language-server/gopls/pyright)")
+  .option("--lsp", "deteksi dan resolusi simbol via LSP opsional (typescript-language-server/gopls/pyright/rust-analyzer)")
   .option("--json", "output results as JSON")
   .action((opts: { rebuild?: boolean; clean?: boolean; watch?: boolean; debounce?: number; changedOnly?: boolean; lsp?: boolean; json?: boolean }) =>
     cmdScan(repoRoot(), opts)
@@ -111,12 +107,12 @@ program
 // 2. CONTEXT (AI Agent Task Intelligence)
 // ==========================================
 program
-  .command("context <task>")
+  .command("context [task]")
   .description("Main entry point: auto-refresh + classify + relevant context + scope")
   .option("--escalate", "force full COMPLEX context")
   .option("--no-refresh", "skip incremental refresh (debugging/benchmark)")
   .option("--mode <mode>", "agent mode: NORMAL|FAST|SAFE|AUDIT", "NORMAL")
-  .option("--max-tokens <n>", "potong konteks agar estimasi muat N token (≈ char/4)", intArg)
+  .option("--max-tokens <n>", "potong konteks secara prioritas agar estimasi muat N token (≈ char/4)", intArg)
   .option("--no-history", "lewati bagian Analogi riwayat")
   .option("--with-diff", "tambahkan ringkasan diff pada Analogi riwayat")
   .option("--no-rules", "lewati bagian Project Rules (default)")
@@ -128,13 +124,15 @@ program
   .option("--json", "output results as JSON")
   .option("--explain", "print score breakdown table per symbol (wSeed*seed, prox, cent, recency, cochange, verified)")
   .option("--format <fmt>", "output format: brief|table|tree|mermaid (default markdown)")
+  .option("--from-diff", "ambil file yang berubah di git (vs HEAD atau --base) sebagai seed otomatis")
+  .option("--base <ref>", "base ref untuk --from-diff (mis. origin/main)")
   .option(
     "--anchor <paths>",
     "file/folder titik awal pilihan agent, pisah koma atau ulangi (lihat `scopecairn map`)",
     (v: string, prev: string[] = []) => [...prev, ...v.split(",").filter(Boolean)]
   )
-  .action((task: string, opts: { escalate?: boolean; noRefresh?: boolean; mode?: "NORMAL" | "FAST" | "SAFE" | "AUDIT"; maxTokens?: number; noHistory?: boolean; withDiff?: boolean; noRules?: boolean; withRules?: boolean; withGuard?: boolean; withBodies?: boolean; bodies?: boolean; knowledge?: boolean; json?: boolean; explain?: boolean; format?: string; anchor?: string[] }) =>
-    cmdContext(repoRoot(), task, opts)
+  .action((task: string | undefined, opts: { escalate?: boolean; noRefresh?: boolean; mode?: "NORMAL" | "FAST" | "SAFE" | "AUDIT"; maxTokens?: number; noHistory?: boolean; withDiff?: boolean; noRules?: boolean; withRules?: boolean; withGuard?: boolean; withBodies?: boolean; bodies?: boolean; knowledge?: boolean; json?: boolean; explain?: boolean; format?: string; fromDiff?: boolean; base?: string; anchor?: string[] }) =>
+    cmdContext(repoRoot(), task ?? "", opts)
   );
 
 program
@@ -240,7 +238,7 @@ program
 program
   .command("init [path]")
   .description("Initial indexing + Skill, Workflow, agent skills (never touches AGENTS.md)")
-  .option("--agents <list>", "agent targets: comma list from claude,cursor,windsurf,copilot,kiro,opencode,qoder, or 'all'")
+  .option("--agents <list>", "agent targets: comma list from claude,cursor,windsurf,copilot,kiro,opencode,qoder,codex,gemini, or 'all'")
   .option("--hooks", "install git pre-commit verification guard (.git/hooks/pre-commit)")
   .option("--ci", "write .github/workflows/scopecairn.yml (verify --test-gate --base origin/main)")
   .action((targetPath: string | undefined, opts: { agents?: string; hooks?: boolean; ci?: boolean }) =>
@@ -276,9 +274,10 @@ program
 program
   .command("dead")
   .description("Report symbols and files with no incoming edges (excluding entrypoints, tests, routes, Protected)")
+  .option("--confidence <level>", "minimum confidence filter: high|medium|low (default low)")
   .option("--no-refresh", "skip incremental refresh")
   .option("--json", "output results as JSON")
-  .action((opts: { noRefresh?: boolean; refresh?: boolean; json?: boolean }) =>
+  .action((opts: { confidence?: "high" | "medium" | "low"; noRefresh?: boolean; refresh?: boolean; json?: boolean }) =>
     cmdDead(repoRoot(), opts)
   );
 

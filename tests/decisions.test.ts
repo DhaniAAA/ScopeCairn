@@ -11,7 +11,7 @@ test("decisions round-trip", () => {
   assert.equal(loadDecisions(dir), null);
   appendDecision(dir, "Pilih SQLite untuk index lokal");
   const loaded = loadDecisions(dir);
-  assert.ok(loaded && loaded.includes("SQLite"));
+  assert.ok(loaded?.includes("SQLite"));
   fs.rmSync(dir, { recursive: true, force: true });
 });
 

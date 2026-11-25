@@ -5,7 +5,7 @@ export function lastRunLogPath(repoRoot: string = process.cwd()): string {
   return path.join(repoRoot, ".scopecairn", "last-run.log");
 }
 
-function append(repoRoot: string | undefined, scope: string, text: string): void {
+function append(repoRoot: string | undefined, _scope: string, text: string): void {
   const root = repoRoot ?? process.cwd();
   try {
     fs.mkdirSync(path.dirname(lastRunLogPath(root)), { recursive: true });

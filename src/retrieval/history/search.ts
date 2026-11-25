@@ -40,7 +40,7 @@ export interface HistorySearchOptions {
 export function recencyScore(ts: number, nowSec: number, halfLifeDays: number): number {
   if (ts <= 0) return 0.5;
   const ageDays = Math.max(0, (nowSec - ts) / 86400);
-  return Math.pow(0.5, ageDays / Math.max(1, halfLifeDays));
+  return 0.5 ** (ageDays / Math.max(1, halfLifeDays));
 }
 
 export function sizePenalty(nFiles: number): number {

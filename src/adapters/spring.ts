@@ -41,7 +41,7 @@ export function parseSpringRoutes(content: string): SpringRoute[] {
   let prefix = "";
   const classIdx = content.search(/\bclass\s+\w+/);
   const classReq = /@RequestMapping\s*\(\s*(?:value\s*=\s*)?(['"`])([^'"`]+)\1/.exec(content);
-  if (classReq && classReq[2] && !classReq[2].includes("{")) {
+  if (classReq?.[2] && !classReq[2].includes("{")) {
     const reqIdx = classReq.index;
     if (classIdx === -1 || reqIdx < classIdx) {
       prefix = classReq[2].trim();
@@ -61,8 +61,8 @@ export function parseSpringRoutes(content: string): SpringRoute[] {
     if (verb === "Request" && classIdx !== -1 && m.index < classIdx) continue;
     const after = content.slice(re.lastIndex, re.lastIndex + 800);
     const handlerMatch =
-      /\b(?:public|private|protected|static|final|async|fun)\s+(?:[\w<>\[\].,\s?]+\s+)?([a-zA-Z0-9_$]+)\s*\(/.exec(after) ??
-      /\b(?:public|private|protected|static|final)\s+(?:[\w<>\[\].,\s?]+\s+)?([a-zA-Z0-9_$]+)\s*\(/.exec(after);
+      /\b(?:public|private|protected|static|final|async|fun)\s+(?:[\w<>[\].,\s?]+\s+)?([a-zA-Z0-9_$]+)\s*\(/.exec(after) ??
+      /\b(?:public|private|protected|static|final)\s+(?:[\w<>[\].,\s?]+\s+)?([a-zA-Z0-9_$]+)\s*\(/.exec(after);
     const handler = handlerMatch ? handlerMatch[1] : null;
     const combined = prefix + (sub ? (sub.startsWith("/") ? sub : "/" + sub) : "");
     const routePath = combined.replace(/\/+/g, "/") || "/";

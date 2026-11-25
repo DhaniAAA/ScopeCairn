@@ -42,6 +42,15 @@ jobs:
       - name: Build Bundles
         run: npm run build
 
+      - name: Generate CHANGELOG section (auto)
+        run: node scripts/changelog.js "${GITHUB_REF_NAME#v}"
+
+      - name: Push updated CHANGELOG.md
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "chore: auto-update CHANGELOG for ${{ github.ref_name }}"
+          file_pattern: CHANGELOG.md
+
       - name: Extract Release Notes from CHANGELOG.md
         id: extract_notes
         run: |

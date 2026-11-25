@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.18.0 (2026-11-25)
+
+- (no commits)
+
 ## 0.17.0 (2026-11-16)
 
 - feat: add DevSecOps SARIF/secrets, universal test-gate, monorepo/paths, real LSP, and CI hardening (fd5763f)
